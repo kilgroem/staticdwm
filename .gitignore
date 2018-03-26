@@ -1,0 +1,5 @@
+*.swp
+*.un~
+*.o
+config.h
+staticdwm

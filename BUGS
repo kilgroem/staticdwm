@@ -1,0 +1,4 @@
+Multi-monitor setups are completely untested.
+
+Launching from within ratpoison, making a window fullscreen, then exiting and
+makes the wm nonresponsive.
