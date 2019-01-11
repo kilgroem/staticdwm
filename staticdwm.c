@@ -45,6 +45,7 @@
 #include "util.h"
 /*}}}*/
 /* Macros {{{*/
+#define NFRAMES					(MAXTILEDFRAMES + 1)
 #define BUTTONMASK              (ButtonPressMask|ButtonReleaseMask)
 #define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) &\
 		(ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
@@ -58,21 +59,29 @@
 #define MOUSEMASK               (BUTTONMASK|PointerMotionMask)
 #define WIDTH(X)                ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X)               ((X)->h + 2 * (X)->bw)
-#define TAGMASK                 ((1 << LENGTH(tags)) - 1)
 #define TEXTW(X)                (drw_fontset_getwidth(drw, (X)) + lrpad)
+#define SETBORDERCOL(X)		 	XSetWindowBorder(dpy, (X)->win,\
+			scheme[c->isfloating ? SchemeFlFoc : SchemeFoc][ColBorder].pixel);
 #define ColBorder               2
 /*}}}*/
 /* Enumerators {{{*/
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
-enum { SchemeNorm, SchemeSel, SchemeFoc}; /* color schemes */
+enum { SchemeNorm, SchemeSel, SchemeFoc,
+	   SchemeFlNorm, SchemeFlSel, SchemeFlFoc}; /* color schemes */
 enum { NetSupported, NetWMName, NetWMState, NetWMCheck,
        NetWMFullscreen, NetActiveWindow, NetWMWindowType,
        NetWMWindowTypeDialog, NetClientList, NetLast }; /* EWMH atoms */
 enum { WMProtocols, WMDelete, WMState, WMTakeFocus, WMLast };/* default atoms */
-enum { ClkTagBar, ClkFrmBar, ClkStatusText, ClkWinTitle, ClkSelWinTitle,
-       ClkClientWin, ClkRootWin, ClkLast }; /* clicks */
+enum { ClkTagBar, ClkFrmBar, ClkStatusText, ClkWinTitle, ClkClientWin,
+	   ClkRootWin, ClkLast, ClkFrm }; /* clicks */
 /*}}}*/
-/* Structures {{{*/
+/* Forward definitions {{{*/
+typedef struct Monitor Monitor;
+typedef struct ClientLink ClientLink;
+typedef struct Client Client;
+typedef struct Frame Frame;
+/*}}}*/
+/* Structures needed for config.h {{{*/
 /* Arg {{{*/
 typedef union {
 	int i;
@@ -90,27 +99,6 @@ typedef struct {
 	const Arg arg;
 } Button;
 /*}}}*/
-/* Forward definitions {{{*/
-typedef struct Monitor Monitor;
-typedef struct Client Client;
-typedef struct Frame Frame;
-/*}}}*/
-/* Client {{{*/
-struct Client {
-	char name[256];
-	float mina, maxa;
-	int x, y, w, h;
-	int oldx, oldy, oldw, oldh;
-	int basew, baseh, incw, inch, maxw, maxh, minw, minh;
-	int bw, oldbw;
-	unsigned int tags;
-	int isfixed, isurgent, neverfocus, oldtags, isfullscreen;
-	Client *next;
-	Client *snext;
-	Client *sprev;
-	Monitor *mon;
-	Window win;
-};/*}}}*/
 /* Key {{{*/
 typedef struct {
 	unsigned int mod;
@@ -119,42 +107,12 @@ typedef struct {
 	const Arg arg;
 } Key;
 /*}}}*/
-/* Frame {{{*/
-struct Frame {
-	unsigned int seltags;
-	unsigned int tagset[2];
-	int x;
-	int y;
-	int w;
-	int h;
-	Client * last;
-	Monitor * mon;
-};
-/*}}}*/
-/* Monitor {{{*/
-struct Monitor {
-	int num;
-	int by;               /* bar geometry */
-	int mx, my, mw, mh;   /* screen size */
-	int wx, wy, ww, wh;   /* window area  */
-	unsigned int selfrm;
-	unsigned int focfrm;
-	int showbar;
-	int topbar;
-	Client *clients;
-	Client *stack;
-	Client *stacklast;
-	Monitor *next;
-	Window barwin;
-	Frame * frames;
-};
-/*}}}*/
 /* Rule {{{*/
 typedef struct {
 	const char *class;
 	const char *instance;
 	const char *title;
-	unsigned int tags;
+	int tag;
 	int isfloating;
 	int monitor;
 } Rule;
@@ -167,14 +125,14 @@ static int applysizehints(Client *c, int *x, int *y, int *w, int *h,
 static void arrange(Monitor *m);
 static void arrangemon(Monitor *m);
 static void attach(Client *c);
+static void attachfocus(Client * c);
 static void attachstack(Client *c);
 static void buttonpress(XEvent *e);
 static void checkotherwm(void);
 static void cleanup(void);
 static void cleanupmon(Monitor *mon);
+static int clicktoframe(Monitor *m, float fx, float fy);
 static void clientmessage(XEvent *e);
-static void closeframe(const Arg *arg);
-static void closeframebelow(const Arg *arg);
 static void configure(Client *c);
 static void configurenotify(XEvent *e);
 static void configurerequest(XEvent *e);
@@ -185,18 +143,13 @@ static void detachstack(Client *c);
 static Monitor *dirtomon(int dir);
 static void drawbar(Monitor *m);
 static void drawbars(void);
-static void emptyframe(const Arg *arg);
 static void enternotify(XEvent *e);
 static void exchangeframecontents(unsigned int a, unsigned int b);
 static void expose(XEvent *e);
 static void refocus(void);
-static void fillframe(const Arg *arg);
 static void focusclient(Client *c);
-static void focusframe(const Arg *arg);
 static void focusin(XEvent *e);
-static void focusmon(const Arg *arg);
-static void focusnothing();
-static void fillframe(const Arg *arg);
+static void focusnothing(void);
 static int getrootptr(int *x, int *y);
 static long getstate(Window w);
 static int gettextprop(Window w, Atom atom, char *text, unsigned int size);
@@ -206,49 +159,37 @@ static int isavailable(Client * c);
 static int isfloating(Client * c);
 static int isinfrm(Client * c);
 static void keypress(XEvent *e);
-static void killclient(const Arg *arg);
 static void manage(Window w, XWindowAttributes *wa);
 static void mappingnotify(XEvent *e);
 static void maprequest(XEvent *e);
 static void motionnotify(XEvent *e);
-static void movemouse(const Arg *arg);
-static void onlyframe(const Arg *arg);
 static void propertynotify(XEvent *e);
-static void quit(const Arg *arg);
 static Monitor *recttomon(int x, int y, int w, int h);
 static void resize(Client *c, int x, int y, int w, int h, int interact);
 static void resizeclient(Client *c, int x, int y, int w, int h);
-static void resizemouse(const Arg *arg);
 static void restack(Monitor *m);
 static void restacksel(void);
 static void run(void);
 static void scan(void);
 static int sendevent(Client *c, Atom proto);
 static void sendmon(Client *c, Monitor *m);
-static void selectframe(const Arg *arg);
 static Client * selwinforselfrm(Monitor * m, int dir);
 static void setclientstate(Client *c, long state);
+static void setfocfrm(Monitor * m, unsigned int frm);
 static void setfocus(Client *c);
 static void setfullscreen(Client *c, int fullscreen);
+static void setopenframes(Monitor *m, unsigned int nf);
+static void setselfrm(Monitor * m, unsigned int frm);
 static void setup(void);
 static void seturgent(Client *c, int urg);
 static void showhide(Client *c);
 static void sigchld(int unused);
-static void spawn(const Arg *arg);
-static void swapfocus(const Arg *arg);
-static void swapframe(const Arg *arg);
-static void tag(const Arg *arg);
-static void tagmon(const Arg *arg);
-static void togglebar(const Arg *arg);
-static void togglefloating(const Arg *arg);
-static void toggleframe(const Arg *arg);
-static void toggletag(const Arg *arg);
-static void toggleview(const Arg *arg);
 static void unfocus(Client *c, int setfocus);
 static void unmanage(Client *c, int destroyed);
 static void unmapnotify(XEvent *e);
 static void updatebarpos(Monitor *m);
 static void updatebars(void);
+static void updateborder(Client *c, int bw);
 static void updateclientlist(void);
 static void updatefrmpos(Monitor * m);
 static int updategeom(void);
@@ -258,20 +199,100 @@ static void updatestatus(void);
 static void updatewindowtype(Client *c);
 static void updatetitle(Client *c);
 static void updatewmhints(Client *c);
-static void view(const Arg *arg);
 static Client *wintoclient(Window w);
 static Monitor *wintomon(Window w);
 static int xerror(Display *dpy, XErrorEvent *ee);
 static int xerrordummy(Display *dpy, XErrorEvent *ee);
 static int xerrorstart(Display *dpy, XErrorEvent *ee);
 /*}}}*/
+/* User Called Function Declarations {{{*/
+static void closeframe(const Arg *arg);
+static void closeframebelow(const Arg *arg);
+static void emptyframe(const Arg *arg);
+static void fillframe(const Arg *arg);
+static void focusframe(const Arg *arg);
+static void focusmon(const Arg *arg);
+static void killclient(const Arg *arg);
+static void movemouse(const Arg *arg);
+static void onlyframe(const Arg *arg);
+static void quit(const Arg *arg);
+static void resizemouse(const Arg *arg);
+static void selectframe(const Arg *arg);
+static void spawn(const Arg *arg);
+static void swapfocus(const Arg *arg);
+static void swapframe(const Arg *arg);
+static void tag(const Arg *arg);
+static void tagandview(const Arg *arg);
+static void tagmon(const Arg *arg);
+static void togglebar(const Arg *arg);
+static void togglefloating(const Arg *arg);
+static void toggleframe(const Arg *arg);
+static void view(const Arg *arg);
+/*}}}*/
+/* Include config.h {{{*/
+#include "config.h"
+/*}}}*/
+/* Other Structures {{{*/
+/* Frame {{{*/
+struct Frame {
+	unsigned int tag;
+	int x;
+	int y;
+	int w;
+	int h;
+	Client * last;
+	Monitor * mon;
+};
+/*}}}*/
+/* Client {{{*/
+struct Client {
+	char name[256];
+	float mina, maxa;
+	int x, y, w, h;
+	int oldx, oldy, oldw, oldh;
+	int basew, baseh, incw, inch, maxw, maxh, minw, minh;
+	int bw, oldbw;
+	unsigned int tag, lastfrm;
+	int isfixed, isurgent, neverfocus, isfloating, isfullscreen;
+	Client *next, *snext, *sprev, *focusto;
+	ClientLink *focusfrom;
+	Monitor *mon;
+	Window win;
+};/*}}}*/
+/* Monitor {{{*/
+struct Monitor {
+	int num;
+	int by;               /* bar geometry */
+	int mx, my, mw, mh;   /* screen size */
+	int wx, wy, ww, wh;   /* window area  */
+	/* max x positions for bar features to turn click position to action */
+	int btagx[NTAGS], bfrmx[NFRAMES], bseltitlex;
+	int nopenfrms;
+	unsigned int selfrm, focfrm, selfrmold, focfrmold;
+	int showbar;
+	int topbar;
+	Client *clients;
+	Client *stack;
+	Client *stacklast;
+	Monitor *next;
+	Window barwin;
+	Frame frames[NFRAMES];
+};
+/*}}}*/
+/* ClientLink {{{*/
+struct ClientLink {
+	Client * c;
+	ClientLink * prev;
+	ClientLink * next;
+};/*}}}*/
+/*}}}*/
 /* Variables {{{*/
 static const char broken[] = "broken";
 static char stext[256];
-static size_t nframes;
+static size_t nframehooks;
 static int screen;
 static int sw, sh;           /* X display screen geometry width, height */
-static int bh, * btagmaxx, * bframemaxx, bseltitlemaxx = 0; /* bar geometry */
+static int bh; /* bar geometry */
 static int lrpad;            /* sum of left and right padding for text */
 static int (*xerrorxlib)(Display *, XErrorEvent *);
 static unsigned int numlockmask = 0;
@@ -299,21 +320,20 @@ static Display *dpy;
 static Drw *drw;
 static Monitor *mons, *selmon;
 static Window root, wmcheckwin;
-static int ntiles = 1;
-/*}}}*/
-/* Include config.h {{{*/
-#include "config.h"
 /*}}}*/
 /* Compile time check on tags and frame sizes. {{{*/
-struct NumTags {char taglimitexceeded[LENGTH(tags) > 31 ? -1 : 1]; 
-				char atleasttwotagsrequired[LENGTH(tags) < 2 ? -1 : 1]; };
-struct NumFrames {char atleastonetiledframerequired[LENGTH(geometry)<1?-1:1];
-				  char framelimitexceeded[LENGTH(geometry) > 32 ? -1 : 1 ]; };
+struct NumTags {char taglimitexceeded[NTAGS > 31 ? -1 : 1]; 
+				char atleasttwotagsrequired[NTAGS < 2 ? -1 : 1]; };
+struct NumFrames {
+	char framesnotcorrectlydefined[LENGTH(geometry) == NFRAMES ? -1 : 1];
+	char atleastonetiledframerequired[NFRAMES < 1 ? -1 : 1];
+	char numberofframestoohigh[NFRAMES > 32 ? -1 : 1 ]; };
 /*}}}*/
-/* test garbage{{{*/
-#ifdef TESTMESSAGE
+/* Debugging test message {{{*/
+#ifdef USETESTMESSAGE
 char test[64];
 int testpos = 0;
+#define TESTMESSAGE(X) snprintf(test, (sizeof test + (testpos = 0)), (X));
 void testpush(char ch)
 {
 	if (testpos >= (sizeof test) - 2)
@@ -329,27 +349,18 @@ void testclear(void)
 	drawbar(selmon);
 }
 #endif/*}}}*/
-/* focusnothing() {{{*/
-void focusnothing()
-{
-	/* focuses the bar, in cases where a frame is empty */
-	XSetInputFocus(dpy, selmon->barwin, RevertToPointerRoot, CurrentTime);
-	XChangeProperty(dpy, root, netatom[NetActiveWindow],
-		XA_WINDOW, 32, PropModeReplace,
-		(unsigned char *) &(selmon->barwin), 1);
-}/*}}}*/
 /* Functions {{{*/
 /* applyrules() {{{*/
 void applyrules(Client *c)
 {
 	const char *class, *instance;
 	unsigned int i;
+	int tagwasset = 0;
 	const Rule *r;
 	Monitor *m;
 	XClassHint ch = { NULL, NULL };
 
 	/* rule matching */
-	c->tags = 0;
 	XGetClassHint(dpy, c->win, &ch);
 	class    = ch.res_class ? ch.res_class : broken;
 	instance = ch.res_name  ? ch.res_name  : broken;
@@ -360,7 +371,12 @@ void applyrules(Client *c)
 		&& (!r->class || strstr(class, r->class))
 		&& (!r->instance || strstr(instance, r->instance)))
 		{
-			c->tags |= r->tags | (r->isfloating ? 1 : 0);
+			if (r->isfloating)
+				c->isfloating = 1;
+			if (r->tag >= 0 && r->tag  < NTAGS) {
+				tagwasset = 1;
+				c->tag = r->tag;
+			}
 			for (m = mons; m && m->num != r->monitor; m = m->next);
 			if (m)
 				c->mon = m;
@@ -370,11 +386,8 @@ void applyrules(Client *c)
 		XFree(ch.res_class);
 	if (ch.res_name)
 		XFree(ch.res_name);
-	c->tags = c->tags & TAGMASK;
-	if (!c->tags) {
-		Frame * fr = c->mon->frames + c->mon->selfrm;
-		c->tags = fr->tagset[fr->seltags];
-	}
+	if (!tagwasset)
+		c->tag = (c->mon->frames + c->mon->selfrm)->tag;
 }/*}}}*/
 /* applysizehints() {{{*/
 int applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
@@ -444,15 +457,16 @@ int applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 /* arrange() {{{*/
 void arrange(Monitor *m)
 {
-	if (m)
-		showhide(m->stack);
-	else for (m = mons; m; m = m->next)
-		showhide(m->stack);
 	if (m) {
+		showhide(m->stack);
 		arrangemon(m);
 		restack(m);
-	} else for (m = mons; m; m = m->next)
-		arrangemon(m);
+	} else {
+		for (m = mons; m; m = m->next)
+			showhide(m->stack);
+		for (m = mons; m; m = m->next)
+			arrangemon(m);
+	}
 }/*}}}*/
 /* arrangemon() {{{*/
 void arrangemon(Monitor *m)
@@ -462,10 +476,10 @@ void arrangemon(Monitor *m)
 
 	if (!m)
 		return;
-	for (i = 1; i <= ntiles; i++){
+	for (i = 1; i <= m->nopenfrms; i++){
 		Frame * fr = m->frames + i;
 		
-		if ((c = fr->last) && !isfloating(c) && !c->isfullscreen)
+		if ((c = fr->last) && !isfloating(c))
 			resize(fr->last, fr->x, fr->y, fr->w - 2 * c->bw,
 					fr->h - 2 * c->bw, 0);
 	}
@@ -477,6 +491,25 @@ void attach(Client *c)
 		return;
 	c->next = c->mon->clients;
 	c->mon->clients = c;
+}/*}}}*/
+/* attachfocus() {{{*/
+void attachfocus(Client * c)
+{
+	ClientLink * add;
+
+	if (!c || !c->focusto)
+		return;
+	if (c == c->focusto) {
+		c->focusto = 0;
+		return;
+	}
+	add = ecalloc(1, sizeof(ClientLink));
+	add->c = c;
+	add->next = c->focusto->focusfrom;
+	add->prev = 0;
+	if (c->focusto->focusfrom)
+		c->focusto->focusfrom->prev = add;
+	c->focusto->focusfrom = add;
 }/*}}}*/
 /* attachstack() {{{*/
 void attachstack(Client *c)
@@ -508,31 +541,39 @@ void buttonpress(XEvent *e)
 		refocus();
 	}
 	if (ev->window == selmon->barwin) {
-		if (ev->x < btagmaxx[LENGTH(tags)-1]) {
-			for (i = 0; i < LENGTH(tags) && ev->x >= btagmaxx[i]; i++);
+		if (ev->x < m->btagx[NTAGS-1]) {
+			for (i = 0; i < NTAGS && ev->x >= m->btagx[i]; i++);
 			click = ClkTagBar;
-			arg.ui = 1 << i;
-		} else if (ev->x < bframemaxx[nframes-1]) {
-			for (i = 0; i < nframes && ev->x >= bframemaxx[i]; i++);
+			arg.ui = i;
+		} else if (ev->x < m->bfrmx[NFRAMES-1]) {
+			for (i = 0; i < NFRAMES && ev->x >= m->bfrmx[i]; i++);
 			click = ClkFrmBar;
 			arg.ui = i;
-		} else if (ev->x < bseltitlemaxx)
-			click = ClkSelWinTitle;
+		} else if (ev->x < m->bseltitlex)
+			click = ClkWinTitle;
 		else if (ev->x > selmon->ww - TEXTW(stext))
 			click = ClkStatusText;
-		else
+		else if (m->selfrm == m->focfrm)
 			click = ClkWinTitle;
 	} else if ((c = wintoclient(ev->window))) {
 		focusclient(c);
 		restack(selmon);
 		XAllowEvents(dpy, ReplayPointer, CurrentTime);
 		click = ClkClientWin;
+	} else {
+		int whichfrm = clicktoframe(m, (float)(ev->x - m->wx)/(float)(m->ww),
+									   (float)(ev->y - m->wy)/(float)(m->wh));
+		if (whichfrm) {
+			arg.ui = whichfrm;	
+			click = ClkFrm;
+		}
 	}
 	for (i = 0; i < LENGTH(buttons); i++)
 		if (click == buttons[i].click && buttons[i].func
 			&& buttons[i].button == ev->button
 			&& CLEANMASK(buttons[i].mask) == CLEANMASK(ev->state))
-			buttons[i].func((click == ClkTagBar || click == ClkFrmBar)
+			buttons[i].func(
+				(click == ClkTagBar || click == ClkFrmBar || ClkFrm)
 					&& buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
 }/*}}}*/
 /* checkoverwm() {{{*/
@@ -563,8 +604,6 @@ void cleanup(void)
 		drw_cur_free(drw, cursor[i]);
 	for (i = 0; i < LENGTH(colors); i++)
 		free(scheme[i]);
-	free(btagmaxx);
-	free(bframemaxx);
 	XDestroyWindow(dpy, wmcheckwin);
 	drw_free(drw);
 	XSync(dpy, False);
@@ -587,6 +626,23 @@ void cleanupmon(Monitor *mon)
 	free(mon->frames);
 	free(mon);
 }/*}}}*/
+/* clicktoframe() {{{*/
+int clicktoframe(Monitor * m, float fx, float fy)
+{
+	if (m->nopenfrms >= 1) {
+		int i;
+		const float * geo = geometry[m->nopenfrms - 1]; 
+
+		for (i = 0; i < m->nopenfrms; i++) {
+			float x = *(geo++); float y = *(geo++);
+			float mx = *(geo++) + x; float my = *(geo++) + y;
+
+			if (fx >= x && fy >= y && fx < mx && fy < my )
+				return i + 1;
+		}
+	}
+	return 0;
+}/*}}}*/
 /* clientmessage() {{{*/
 void clientmessage(XEvent *e)
 {
@@ -605,42 +661,6 @@ void clientmessage(XEvent *e)
 		if (c != FOCUSED(selmon) && !c->isurgent)
 			seturgent(c, 1);
 	}
-}/*}}}*/
-/* closeframe(){{{*/
-void closeframe(const Arg *arg)
-{
-	int i;
-
-	if (selmon->selfrm <= 0)
-		return;
-	for (i = selmon->selfrm; i < nframes-1; i++)
-		exchangeframecontents(i, i+1);
-	ntiles--;
-	if (selmon->selfrm > ntiles)
-		selmon->selfrm--;
-	if (selmon->focfrm >= selmon->selfrm) {
-		unfocus(FOCUSED(selmon), 0);
-		selmon->focfrm = selmon->selfrm;
-		refocus();
-	}
-	updatefrmpos(selmon);
-	arrange(selmon);
-}/*}}}*/
-/* closeframebelow(){{{*/
-void closeframebelow(const Arg *arg)
-{
-	if (!arg || arg->ui > ntiles)
-		return;
-	ntiles = arg->ui;
-	if (selmon->selfrm > arg->ui)
-		selmon->selfrm = arg->ui;
-	if (selmon->focfrm > arg->ui) {
-		unfocus(FOCUSED(selmon), 0);
-		selmon->focfrm = arg->ui;
-		refocus();
-	}
-	updatefrmpos(selmon);
-	arrange(selmon);
 }/*}}}*/
 /* configure() {{{*/
 void configure(Client *c)
@@ -664,7 +684,6 @@ void configure(Client *c)
 void configurenotify(XEvent *e)
 {
 	Monitor *m;
-	Client *c;
 	XConfigureEvent *ev = &e->xconfigure;
 	int dirty;
 
@@ -676,12 +695,8 @@ void configurenotify(XEvent *e)
 		if (updategeom() || dirty) {
 			drw_resize(drw, sw, bh);
 			updatebars();
-			for (m = mons; m; m = m->next) {
-				for (c = m->clients; c; c = c->next)
-					if (c->isfullscreen)
-						resizeclient(c, m->mx, m->my, m->mw, m->mh);
+			for (m = mons; m; m = m->next)
 				XMoveResizeWindow(dpy, m->barwin, m->wx, m->by, m->ww, bh);
-			}
 			refocus();
 			arrange(NULL);
 		}
@@ -700,22 +715,14 @@ void configurerequest(XEvent *e)
 			c->bw = ev->border_width;
 		else if (isfloating(c)) {
 			m = c->mon;
-			if (ev->value_mask & CWX) {
-				c->oldx = c->x;
+			if (ev->value_mask & CWX)
 				c->x = m->mx + ev->x;
-			}
-			if (ev->value_mask & CWY) {
-				c->oldy = c->y;
+			if (ev->value_mask & CWY)
 				c->y = m->my + ev->y;
-			}
-			if (ev->value_mask & CWWidth) {
-				c->oldw = c->w;
+			if (ev->value_mask & CWWidth)
 				c->w = ev->width;
-			}
-			if (ev->value_mask & CWHeight) {
-				c->oldh = c->h;
+			if (ev->value_mask & CWHeight)
 				c->h = ev->height;
-			}
 			/* center in x direction */
 			if ((c->x + c->w) > m->mx + m->mw)
 				c->x = m->mx + (m->mw / 2 - WIDTH(c) / 2);
@@ -748,20 +755,16 @@ Monitor * createmon(void)
 	Monitor *m;
 
 	m = ecalloc(1, sizeof(Monitor));
-	m->frames = ecalloc(nframes, sizeof(Frame));
-	for (i = 0; i < nframes; i++) {
+	for (i = 0; i < NFRAMES; i++) {
 		Frame * fr = m->frames + i;
-		fr->seltags = 0;
-		fr->tagset[0] = 1<<1;
-		fr->tagset[1] = 1<<1;
+		/* floating fr set to default so managed clients inherit tag */
+		fr->tag = DEFAULTTAG;
 		fr->last = NULL;
 		fr->mon = m;
 	}
-	/* set floating tag on the floating frame */
-	m->frames[0].tagset[0] = 1;
-	m->frames[0].tagset[1] = 1;
-	m->selfrm = 1;
-	m->focfrm = 1;
+	m->nopenfrms = framesonstart > NFRAMES - 1 ? NFRAMES - 1 : framesonstart;
+	m->selfrm = m->selfrmold = m->nopenfrms;
+	m->focfrm = m->focfrmold = m->nopenfrms;
 	m->showbar = showbar;
 	m->topbar = topbar;
 	return m;
@@ -818,61 +821,79 @@ Monitor * dirtomon(int dir)
 void drawbar(Monitor *m)
 {
 	int x, w, sw = 0, i;
-	int boxs = drw->fonts->h / 9;
-	int boxw = drw->fonts->h / 6 + 2;
-	unsigned occ = 0, urg = 0;
+	unsigned int urg[NTAGS];
+	unsigned int nclients[NTAGS];
+	unsigned int furg = 0, fclients = 0;
+	
 	char buf[256];
 	Client *c;
 	Frame * fr = m->frames + m->selfrm;
-	int monts = fr->tagset[fr->seltags];
 
+
+	int seltag = fr->tag;
+	int foctag = (m->frames + m->focfrm)->tag;
+	Clr * sfoc, * ssel, * snorm;
+
+	if (m->focfrm) {
+		snorm = scheme[SchemeNorm];
+		sfoc = scheme[SchemeFoc];
+		ssel = scheme[SchemeSel];
+	} else {
+		snorm = scheme[SchemeFlNorm];
+		sfoc = scheme[SchemeFlFoc];
+		ssel = scheme[SchemeFlSel];
+	}
 	/* draw status first so it can be overdrawn by tags later */
 	if (m == selmon) { /* status is only drawn on selected monitor */
-		drw_setscheme(drw, scheme[SchemeNorm]);
+		drw_setscheme(drw, snorm);
 		sw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
 		drw_text(drw, m->ww - sw, 0, sw, bh, 0, stext, 0);
 	}
+	for (i = 0; i < NTAGS; i++)
+		urg[i] = nclients[i] = 0;
 	for (c = m->clients; c; c = c->next) {
-		occ |= c->tags;
-		if (c->isurgent)
-			urg |= c->tags;
+		if (c->isfloating) {
+			fclients++;
+			if (c->isurgent)
+				furg = 1;
+		} else if (c->tag >= 0 && c->tag < NTAGS) {
+			nclients[c->tag]++;
+			if (c->isurgent)
+				urg[c->tag] = 1;
+		}
 	}
 	x = 0;
 	/* draw tags */
-	for (i = 0; i < LENGTH(tags); i++) {
-		snprintf(buf, sizeof buf, i ? "%s" : "\\%s/", tags[i]);
+	for (i = 0; i < NTAGS; i++) {
+		snprintf(buf, sizeof buf, "%d", nclients[i]);
 
-		w = TEXTW(buf) - (i ? 0 : lrpad);
-		drw_setscheme(drw,scheme[monts & 1<<i ?
-				(m->focfrm == m->selfrm ? SchemeFoc : SchemeSel) : SchemeNorm]);
-		drw_text(drw, x, 0, w, bh, i ? lrpad / 2 : 0, buf, urg & 1 << i);
-		/* draw marking box, filled if selected client appears on that tag.*/
-		if (occ & 1 << i)
-			drw_rect(drw, x + boxs, boxs, boxw, boxw,
-				m == selmon && SELECTED(selmon) && SELECTED(selmon)->tags
-				& 1 << i, urg & 1 << i);
-		btagmaxx[i] = (x += w);
+		w = TEXTW(buf);
+		drw_setscheme(drw,(m->focfrm && foctag == i) ? sfoc :
+						  ((m->selfrm && seltag == i) ? ssel : snorm));
+		drw_text(drw, x, 0, w, bh, lrpad/2, buf, 0);
+		if (urg[i])
+			drw_rect(drw, x + 1, 1, w-2, bh-2, 0, 0);
+		m->btagx[i] = (x += w);
 	}
 	/* draw frame information */
-	for (i = 0; i < nframes; i++) {
-		int tagset = m->frames[i].tagset[m->frames[i].seltags];
-		int n = 0;
-
-		for (c = m->clients; c; c = c->next)
-			if (((i && !isfloating(c)) || !i) && (c->tags & tagset)
-					&& (!i || !c->isfullscreen))
-				n++;
-		snprintf(buf, sizeof buf, i ? (i<=ntiles ? "[%d]" : "[X]" ) :"\\%d/",n);
-
+	snprintf(buf, sizeof buf, "[%d]", fclients);
+	w = TEXTW(buf) - lrpad;
+	drw_setscheme(drw, 0 == m->focfrm ? sfoc :(0 == m->selfrm ? ssel : snorm));
+	m->bfrmx[0] = x = drw_text(drw, x, 0, w, bh, 0, buf, furg);
+	if (furg)
+		drw_rect(drw, x - w + 1, 1, w-2, bh-2, 0, 0);
+	for (i = 1; i < NFRAMES; i++) {
+		c = m->frames[i].last;
+		snprintf(buf, sizeof buf, i<=m->nopenfrms ?
+								((c && !c->isfloating) ? "[+]":"[-]"):"[ ]");
 		w = TEXTW(buf) - lrpad;
-		drw_setscheme(drw, scheme[i == m->focfrm ? SchemeFoc
-				: (i == m->selfrm ? SchemeSel :SchemeNorm)]);
-		bframemaxx[i] = x = drw_text(drw, x, 0, w, bh, 0, buf, 0);
+		drw_setscheme(drw, i==m->focfrm ? sfoc : (i==m->selfrm ? ssel :snorm));
+		m->bfrmx[i] = x = drw_text(drw, x, 0, w, bh, 0, buf, 0);
 	}
 #ifdef TESTMESSAGE
 	if (*test) {
 		w = TEXTW(test);
-		drw_setscheme(drw, scheme[SchemeSel]);
+		drw_setscheme(drw, ssel);
 		x = drw_text(drw, x, 0, w, bh, lrpad / 2, test, 0);
 	}
 #endif
@@ -883,22 +904,17 @@ void drawbar(Monitor *m)
 
 			strncpy(shortname, c->name, (sizeof shortname) - 1);
 			w = TEXTW(shortname);
-			drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
-			bseltitlemaxx = drw_text(drw, x, 0, w, bh, lrpad/2,shortname,0);
-			if (1 || isfloating(c))
-				drw_rect(drw, x + boxs, boxs, boxw, boxw, 
-							c->isfixed, 0);
-			x = bseltitlemaxx;
-		}
+			drw_setscheme(drw, m == selmon ? ssel : snorm);
+			m->bseltitlex = drw_text(drw, x, 0, w, bh, lrpad/2,shortname,0);
+			x = m->bseltitlex;
+		} else
+			m->bseltitlex = x;
 		w = m->ww - sw - x;
 		if ((c = FOCUSED(m))) {
-			drw_setscheme(drw, scheme[m == selmon ? SchemeFoc : SchemeNorm]);
+			drw_setscheme(drw, m == selmon ? sfoc : snorm);
 			drw_text(drw, x, 0, w, bh, lrpad / 2, c->name, 0);
-			if (isfloating(c))
-				drw_rect(drw, x + boxs, boxs, boxw, boxw, 
-							c->isfixed, 0);
 		} else {
-			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_setscheme(drw, snorm);
 			drw_rect(drw, x, 0, w, bh, 1, 1);
 		}
 	}
@@ -932,40 +948,24 @@ void enternotify(XEvent *e)
 		return;
 	}
 }/*}}}*/
-/* emptyframe() {{{*/
-void emptyframe(const Arg *arg)
-{
-	if (selmon->selfrm == selmon->focfrm)
-		unfocus(FOCUSED(selmon), 0);
-	selmon->frames[selmon->selfrm].last = NULL;
-	focusnothing();
-	arrange(selmon);
-}/*}}}*/
 /* exchangeframecontents() {{{*/
 void exchangeframecontents(unsigned int a, unsigned int b)
 {
 	Frame * fr = selmon->frames;
 	Client * c;
 	int i;
-
-	if (a == b || a >= nframes || b >= nframes)
+	if (a == b || a >= NFRAMES || b >= NFRAMES || a == 0 || b == 0)
 		return;
-	selmon->selfrm = a == selmon->selfrm ? b :
-					(b == selmon->selfrm ? a : selmon->selfrm);
-	selmon->focfrm = a == selmon->focfrm ? b :
-					(b == selmon->focfrm ? a : selmon->focfrm);
+	setselfrm(selmon, (a == selmon->selfrm ? b :
+				(b == selmon->selfrm ? a : selmon->selfrm)));
+	setfocfrm(selmon, (a == selmon->focfrm ? b :
+				(b == selmon->focfrm ? a : selmon->focfrm)));
 	c = fr[a].last;
 	fr[a].last = fr[b].last;
 	fr[b].last = c;
-	i = fr[a].tagset[0];
-	fr[a].tagset[0] = fr[b].tagset[0];
-	fr[b].tagset[0] = i;
-	i = fr[a].tagset[1];
-	fr[a].tagset[1] = fr[b].tagset[1];
-	fr[b].tagset[1] = i;
-	i = fr[a].seltags;
-	fr[a].seltags = fr[b].seltags;
-	fr[b].seltags = i;
+	i = fr[a].tag;
+	fr[a].tag = fr[b].tag;
+	fr[b].tag = i;
 }/*}}}*/
 /* expose() {{{*/
 void expose(XEvent *e)
@@ -976,44 +976,10 @@ void expose(XEvent *e)
 	if (ev->count == 0 && (m = wintomon(ev->window)))
 		drawbar(m);
 }/*}}}*/
-/* refocus() {{{*/
-void refocus(void)
-{
-	Client * c = FOCUSED(selmon);
-
-	if (c) {
-		if (c->isurgent)
-			seturgent(c, 0);
-		detachstack(c);
-		attachstack(c);
-		grabbuttons(c, 1);
-		XSetWindowBorder(dpy, c->win, scheme[SchemeFoc][ColBorder].pixel);
-		setfocus(c);
-	} else {
-		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
-	}
-	drawbars();
-}/*}}}*/
-/* fillframe() {{{*/
-void fillframe(const Arg *arg)
-{
-	Client *c;
-
-	if (arg && (c = selwinforselfrm(selmon, arg->i))) {
-		if (selmon->selfrm == selmon->focfrm)
-			unfocus(FOCUSED(selmon), 0);
-		selmon->frames[selmon->selfrm].last = c;
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		else
-			restacksel();
-		arrange(selmon);
-	}
-}/*}}}*/
 /* focusclient() {{{*/
 void focusclient(Client *c)
 {
+/* should this be focusing the already focused client? */
 	int i;
 
 	if (c) {
@@ -1022,62 +988,24 @@ void focusclient(Client *c)
 		unfocus(FOCUSED(selmon), 0);
 		if (isfloating(c)) {
 			selmon = c->mon;
-			selmon->selfrm = 0;
-			selmon->focfrm = 0;
+			setselfrm(selmon, 0);
+			setfocfrm(selmon, 0);
 			FOCUSED(selmon) = c;
 		} else {
-			for (i = 1; i <= ntiles && c != fr[i].last; i++);
-			if (i <= ntiles) {
+			for (i = 1; i <= c->mon->nopenfrms && c != fr[i].last; i++);
+			if (i <= c->mon->nopenfrms) {
 				selmon = c->mon;
-				selmon->selfrm = i;
-				selmon->focfrm = i;
+				setfocfrm(selmon, i);
+				setselfrm(selmon, i);
 				FOCUSED(selmon) = c;
 			}
 		}
-	} else
-		c = FOCUSED(selmon);
-	if (c) {
-		if (c->isurgent)
-			seturgent(c, 0);
-		detachstack(c);
-		attachstack(c);
-		grabbuttons(c, 1);
-		XSetWindowBorder(dpy, c->win, scheme[SchemeFoc][ColBorder].pixel);
-		setfocus(c);
-	} else {
-		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
-	drawbars();
-}/*}}}*/
-/* focusframe() {{{*/
-void focusframe(const Arg *arg)
-{
-	if (arg && arg->ui < nframes &&
-		(selmon->focfrm != arg->ui || selmon->selfrm != arg->ui)) {
-		unfocus(FOCUSED(selmon), 0);
-		selmon->selfrm = arg->ui;
-		selmon->focfrm = arg->ui;
-		/*clear tiled frame last filled with floating/fullscreen client*/
-		if (selmon->selfrm && (isfloating(FOCUSED(selmon)) ||
-				(FOCUSED(selmon) && FOCUSED(selmon)->isfullscreen)))
-			FOCUSED(selmon) = NULL;
-		if (ntiles < arg->ui) {
-			int i, j;
-
-			for (i = 1; i < nframes; i++) /* remove stale tiled last clients */
-				for (j = i + 1; j < nframes; j++)
-					if (selmon->frames[j].last == selmon->frames[i].last)
-						selmon->frames[j].last = NULL;
-			ntiles = arg->ui;
-			updatefrmpos(selmon);
-		}
-		if (FOCUSED(selmon))
-			refocus();
-		else
-			focusnothing();
-		arrange(selmon);
-	}
+	if (FOCUSED(selmon))
+		refocus();
+	else
+		focusnothing();
+	arrange(selmon);
 }/*}}}*/
 /* focusin() {{{*/
 /* there are some broken focus acquiring clients needing extra handling */
@@ -1089,18 +1017,17 @@ void focusin(XEvent *e)
 	if (c && ev->window != c->win)
 		refocus();
 }/*}}}*/
-/* focusmon() {{{*/
-void focusmon(const Arg *arg)
+/* focusnothing() {{{*/
+void focusnothing()
 {
-	Monitor *m;
-
-	if (!arg || !mons->next)
-		return;
-	if ((m = dirtomon(arg->i)) == selmon)
-		return;
-	unfocus(FOCUSED(selmon), 0);
-	selmon = m;
-	refocus();
+	/* focuses the bar instead of actually focusing nothing */
+	XSetInputFocus(dpy, selmon->barwin, RevertToPointerRoot, CurrentTime);
+	XChangeProperty(dpy, root, netatom[NetActiveWindow],
+		XA_WINDOW, 32, PropModeReplace,
+		(unsigned char *) &(selmon->barwin), 1);
+	/* this is what was replaced from dwm */
+	/* XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+	XDeleteProperty(dpy, root, netatom[NetActiveWindow]); */
 }/*}}}*/
 /* getatomprop {{{*/
 Atom getatomprop(Client *c, Atom prop)
@@ -1210,23 +1137,18 @@ int isavailable(Client * c)
 {
 	Monitor * m = c->mon;
 	Frame * fr = m->frames + m->selfrm;
-
 	if (m->selfrm) {
-		return (c->tags & fr->tagset[fr->seltags]) && !isinfrm(c)
-			&& !c->isfullscreen;
+		return (c->tag == fr->tag) && !isinfrm(c);
 	}else{ /* any except focused client is available for the floating frame */
-		return (c->tags & fr->tagset[fr->seltags]) && (c != fr->last);
+		return c->isfloating && c != fr->last;
 	}
 }/*}}}*/
 /* isfloating() {{{*/
 int isfloating(Client * c)
 {
-	Frame * fr;
-
 	if (!c)
 		return 0;
-	fr = c->mon->frames;
-	return  c->isfixed || (c->tags & fr->tagset[fr->seltags]);
+	return  c->isfixed || c->isfloating;
 }/*}}}*/
 /* isinfrm() {{{*/
 int isinfrm(Client * c)
@@ -1236,11 +1158,11 @@ int isinfrm(Client * c)
 	
 	if (!c)
 		return 0;
-	fr = c->mon->frames;
-	if ((fr->tagset[fr->seltags] & c->tags))/* floating windows */
+	if (c->isfloating) /* floating windows */
 		return 1;
-	if (ntiles && !c->isfullscreen) /* windows in frames */
-		for (i = 1; i <= ntiles; i++)
+	fr = c->mon->frames;
+	if (c->mon->nopenfrms) /* windows in frames */
+		for (i = 1; i <= c->mon->nopenfrms; i++)
 			if (fr[i].last == c)
 				return 1;
 	return 0;
@@ -1273,21 +1195,7 @@ void keypress(XEvent *e)
 		&& keys[i].func)
 			keys[i].func(&(keys[i].arg));
 }/*}}}*/
-/* killclient() {{{*/
-void killclient(const Arg *arg)
-{
-	Client * c = arg && arg->i ? FOCUSED(selmon) : SELECTED(selmon);
-
-	if (c && !sendevent(c, wmatom[WMDelete])) {
-		XGrabServer(dpy);
-		XSetErrorHandler(xerrordummy);
-		XSetCloseDownMode(dpy, DestroyAll);
-		XKillClient(dpy, c->win);
-		XSync(dpy, False);
-		XSetErrorHandler(xerror);
-		XUngrabServer(dpy);
-	}
-} /*}}}*/
+/* consider breaking this into smaller functions */
 /* manage() {{{*/
 void manage(Window w, XWindowAttributes *wa)
 {
@@ -1297,6 +1205,11 @@ void manage(Window w, XWindowAttributes *wa)
 
 	c = ecalloc(1, sizeof(Client));
 	c->win = w;
+	c->isfixed = c->isurgent = c->neverfocus = 0;
+	c->isfloating = c->isfullscreen = 0;
+	c->lastfrm = 0;
+	c->focusto = 0;
+	c->focusfrom = 0;
 	/* geometry */
 	c->x = c->oldx = wa->x;
 	c->y = c->oldy = wa->y;
@@ -1307,12 +1220,17 @@ void manage(Window w, XWindowAttributes *wa)
 	updatetitle(c);
 	if (XGetTransientForHint(dpy, w, &trans) && (t = wintoclient(trans))) {
 		c->mon = t->mon;
-		c->tags = t->tags;
+		c->tag = t->tag;
+		c->focusto = t;
 	} else {
 		c->mon = selmon;
 		applyrules(c);
 	}
-
+	if (c->mon->selfrm == 0) {
+		c->isfloating = 1;
+	}
+	if (trans != None)
+		c->isfloating = 1;
 	if (c->x + WIDTH(c) > c->mon->mx + c->mon->mw)
 		c->x = c->mon->mx + c->mon->mw - WIDTH(c);
 	if (c->y + HEIGHT(c) > c->mon->my + c->mon->mh)
@@ -1323,43 +1241,48 @@ void manage(Window w, XWindowAttributes *wa)
 			((c->mon->by == c->mon->my) &&
 			 (c->x + (c->w / 2) >= c->mon->wx) &&
 			 (c->x + (c->w / 2) < c->mon->wx + c->mon->ww)) ? bh : c->mon->my);
-	c->bw = borderpx;
-
+	updatewindowtype(c); /* sets floating, so needs to happen before border */
+	attachfocus(c);
+	c->bw = c->isfloating ? flborderpx : borderpx;
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, w, CWBorderWidth, &wc);
 	XSetWindowBorder(dpy, w, scheme[SchemeNorm][ColBorder].pixel);
 	configure(c); /* propagates border_width, if size doesn't change */
-	updatewindowtype(c);
 	updatesizehints(c);
 	updatewmhints(c);
 	XSelectInput(dpy, w, EnterWindowMask|FocusChangeMask
 							|PropertyChangeMask|StructureNotifyMask);
 	grabbuttons(c, 0);
-	if (!isfloating(c) && trans != None)
-		c->tags |= 1;
-
-	if (isfloating(c)) {
-		Frame * fr = c->mon->frames;
-
-		fr->tagset[fr->seltags] |= 1;
-	}
 	/* frame filling uses client list so add after the selected */
 	if ((t = SELECTED(c->mon))) {
 		c->next = t->next;
 		t->next = c;
-	} else
+	} else {
 		attach(c);
+	}
 	attachstack(c);
 	XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32,
 					PropModeAppend, (unsigned char *) &(c->win), 1);
 	/* some windows require this */
 	XMoveResizeWindow(dpy, c->win, c->x + 2 * sw, c->y, c->w, c->h);
-	
 	setclientstate(c, NormalState);
 	XMapWindow(dpy, c->win);
-	if (c->mon == selmon && selmon->selfrm == selmon->focfrm)
+	if (c->mon == selmon && selmon->selfrm == selmon->focfrm) {
 		unfocus(FOCUSED(selmon), 0);
-	SELECTED(c->mon) = c;
+	}
+	if (c->isfloating) {
+		SELECTED(c->mon) = selwinforselfrm(c->mon, 0);
+		if (c->mon->selfrm == c->mon->focfrm) {
+			setfocfrm(c->mon, 0);
+			setselfrm(c->mon, 0);
+		} else {
+			setselfrm(c->mon, 0);
+			restack(selmon);
+		}
+		c->mon->frames->last = c;
+	} else {
+		SELECTED(c->mon) = c;
+	}
 	if (c->mon == selmon && selmon->selfrm == selmon->focfrm)
 		refocus();
 	arrange(c->mon);
@@ -1402,81 +1325,6 @@ void motionnotify(XEvent *e)
 	}
 	mon = m;
 }/*}}}*/
-/* movemouse() {{{*/
-void movemouse(const Arg *arg)
-{
-	int x, y, ocx, ocy, nx, ny;
-	Client *c;
-	Monitor *m;
-	XEvent ev;
-	Time lasttime = 0;
-
-	if (!(c = FOCUSED(selmon)))
-		return;
-	if (c->isfullscreen) /* no support moving fullscreen windows by mouse */
-		return;
-	restack(selmon);
-	ocx = c->x;
-	ocy = c->y;
-	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess)
-		return;
-	if (!getrootptr(&x, &y))
-		return;
-	do {
-		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
-		switch(ev.type) {
-		case ConfigureRequest:
-		case Expose:
-		case MapRequest:
-			handler[ev.type](&ev);
-			break;
-		case MotionNotify:
-			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
-				continue;
-			lasttime = ev.xmotion.time;
-
-			nx = ocx + (ev.xmotion.x - x);
-			ny = ocy + (ev.xmotion.y - y);
-			if (abs(selmon->wx - nx) < snap)
-				nx = selmon->wx;
-			else if (abs((selmon->wx + selmon->ww) - (nx + WIDTH(c))) < snap)
-				nx = selmon->wx + selmon->ww - WIDTH(c);
-			if (abs(selmon->wy - ny) < snap)
-				ny = selmon->wy;
-			else if (abs((selmon->wy + selmon->wh) - (ny + HEIGHT(c))) < snap)
-				ny = selmon->wy + selmon->wh - HEIGHT(c);
-			if (!isfloating(c) && (abs(nx - c->x) > snap
-							   || abs(ny - c->y) > snap))
-				togglefloating(NULL);
-			if (isfloating(c))
-				resize(c, nx, ny, c->w, c->h, 1);
-			break;
-		}
-	} while (ev.type != ButtonRelease);
-	XUngrabPointer(dpy, CurrentTime);
-	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
-		sendmon(c, m);
-		selmon = m;
-		refocus();
-	}
-}/*}}}*/
-/* onlyframe(){{{*/
-void onlyframe(const Arg *arg)
-{
-	if (selmon->selfrm <= 0)
-		return;
-	if (selmon->focfrm != 1)
-		unfocus(FOCUSED(selmon), 0);
-	if (selmon->selfrm != 1)
-		exchangeframecontents(1, selmon->selfrm);
-	selmon->selfrm = 1;
-	selmon->focfrm = 1;
-	refocus();
-	ntiles = 1;
-	updatefrmpos(selmon);
-	arrange(selmon);
-}/*}}}*/
 /* propertynotify() {{{*/
 void propertynotify(XEvent *e)
 {
@@ -1492,11 +1340,9 @@ void propertynotify(XEvent *e)
 		switch(ev->atom) {
 		default: break;
 		case XA_WM_TRANSIENT_FOR:
-			if (!isfloating(c) && (XGetTransientForHint(dpy, c->win, &trans)) &&
-				(c->tags |= ((wintoclient(trans)) != NULL) ? 1 : 0)) {
-				Frame * fr = c->mon->frames;
-
-				fr->tagset[fr->seltags] |= 1;
+			if (!isfloating(c) && (XGetTransientForHint(dpy, c->win, &trans))&&
+				(wintoclient(trans) != NULL)) {
+				c->isfloating = 1;
 				arrange(c->mon);
 			}
 			break;
@@ -1517,11 +1363,6 @@ void propertynotify(XEvent *e)
 			updatewindowtype(c);
 	}
 }/*}}}*/
-/* quit() {{{*/
-void quit(const Arg *arg)
-{
-	running = 0;
-}/*}}}*/
 /* recttomon() {{{*/
 Monitor * recttomon(int x, int y, int w, int h)
 {
@@ -1535,6 +1376,24 @@ Monitor * recttomon(int x, int y, int w, int h)
 		}
 	return r;
 }/*}}}*/
+/* refocus() {{{*/
+void refocus(void)
+{
+	Client * c = FOCUSED(selmon);
+
+	if (c) {
+		if (c->isurgent)
+			seturgent(c, 0);
+		detachstack(c);
+		attachstack(c);
+		grabbuttons(c, 1);
+		SETBORDERCOL(c);
+		setfocus(c);
+	} else {
+		focusnothing();
+	}
+	drawbars();
+}/*}}}*/
 /* resize() {{{*/
 void resize(Client *c, int x, int y, int w, int h, int interact)
 {
@@ -1546,74 +1405,14 @@ void resizeclient(Client *c, int x, int y, int w, int h)
 {
 	XWindowChanges wc;
 
-	c->oldx = c->x; c->x = wc.x = x;
-	c->oldy = c->y; c->y = wc.y = y;
-	c->oldw = c->w; c->w = wc.width = w;
-	c->oldh = c->h; c->h = wc.height = h;
+	c->x = wc.x = x;
+	c->y = wc.y = y;
+	c->w = wc.width = w;
+	c->h = wc.height = h;
 	wc.border_width = c->bw;
 	XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
 	configure(c);
 	XSync(dpy, False);
-}/*}}}*/
-/* resizemouse() {{{*/
-void resizemouse(const Arg *arg)
-{
-	int ocx, ocy, nw, nh;
-	Client *c;
-	Monitor *m;
-	XEvent ev;
-	Time lasttime = 0;
-
-	if (!(c = FOCUSED(selmon)))
-		return;
-	if (c->isfullscreen) /* no support resizing fullscreen windows by mouse */
-		return;
-	restack(selmon);
-	ocx = c->x;
-	ocy = c->y;
-	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess)
-		return;
-	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
-					c->w + c->bw - 1, c->h + c->bw - 1);
-	do {
-		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
-		switch(ev.type) {
-		case ConfigureRequest:
-		case Expose:
-		case MapRequest:
-			handler[ev.type](&ev);
-			break;
-		case MotionNotify:
-			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
-				continue;
-			lasttime = ev.xmotion.time;
-
-			nw = MAX(ev.xmotion.x - ocx - 2 * c->bw + 1, 1);
-			nh = MAX(ev.xmotion.y - ocy - 2 * c->bw + 1, 1);
-			if (c->mon->wx + nw >= selmon->wx
-				&& c->mon->wx + nw <= selmon->wx + selmon->ww
-				&& c->mon->wy + nh >= selmon->wy
-				&& c->mon->wy + nh <= selmon->wy + selmon->wh)
-			{
-				if (!isfloating(c) && (abs(nw - c->w) > snap
-								   || abs(nh - c->h) > snap))
-					togglefloating(NULL);
-			}
-			if (isfloating(c))
-				resize(c, c->x, c->y, nw, nh, 1);
-			break;
-		}
-	} while (ev.type != ButtonRelease);
-	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
-					c->w + c->bw - 1, c->h + c->bw - 1);
-	XUngrabPointer(dpy, CurrentTime);
-	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
-	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
-		sendmon(c, m);
-		selmon = m;
-		refocus();
-	}
 }/*}}}*/
 /* restack() {{{*/
 void restack(Monitor *m)
@@ -1733,7 +1532,6 @@ int sendevent(Client *c, Atom proto)
 void sendmon(Client *c, Monitor *m)
 {
 	int i;
-	Frame * fr;
 
 	if (!c || !m || c->mon == m)
 		return;
@@ -1741,8 +1539,7 @@ void sendmon(Client *c, Monitor *m)
 	detach(c);
 	detachstack(c);
 	c->mon = m;
-	fr = m->frames + m->selfrm;
-	c->tags = fr->tagset[fr->seltags]; /* assign tags of selected frame */
+	c->tag = (m->frames + m->selfrm)->tag; /* assign tags of selected frame */
 	attach(c);
 	attachstack(c);
 	if (c == selmon->frames[selmon->selfrm].last) { /* refill selected */
@@ -1750,18 +1547,10 @@ void sendmon(Client *c, Monitor *m)
 		if (selmon->selfrm == selmon->focfrm)
 			refocus();
 	}
-	for (i = 0; i < nframes; i++) /* clear others */
+	for (i = 0; i < NFRAMES; i++) /* clear others */
 		if (c == selmon->frames[i].last)
 			selmon->frames[i].last = NULL;
 	arrange(NULL);
-}/*}}}*/
-/* selectframe(){{{*/
-void selectframe(const Arg *arg)
-{
-	if (arg && arg->ui <= ntiles && selmon->selfrm != arg->ui) {
-		selmon->selfrm = arg->ui;
-		drawbar(selmon); /* update frame selection marker */
-	}
 }/*}}}*/
 /* selwinforselfrm() {{{*/
 Client * selwinforselfrm(Monitor * m, int dir)
@@ -1800,6 +1589,14 @@ void setclientstate(Client *c, long state)
 	XChangeProperty(dpy, c->win, wmatom[WMState], wmatom[WMState], 32,
 		PropModeReplace, (unsigned char *)data, 2);
 }/*}}}*/
+/* setfocfrm() {{{*/
+void setfocfrm(Monitor * m, unsigned int frm)
+{
+	if (m->focfrm != frm) {
+		m->focfrmold = m->focfrm;
+		m->focfrm = frm;
+	}
+}/*}}}*/
 /* setfocus() {{{*/
 void setfocus(Client *c)
 {
@@ -1814,33 +1611,55 @@ void setfocus(Client *c)
 /* setfullscreen() {{{*/
 void setfullscreen(Client *c, int fullscreen)
 {
+	/* after a few attempts to make fullscreen window behavior consistent and
+	 * bug free, I realized I have no idea what the correct behavior for
+	 * fullscreen windows should be in x */
+	/* making a window fill the screen is already possible other ways, so
+	 * instead I decided to have setting fullscreen do nothing, so you can use
+	 * a program's fullscreen mode in any size window */
 	if (fullscreen && !c->isfullscreen) {
-		Frame * fr = c->mon->frames;
-
+		c->isfullscreen = 1;
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)&netatom[NetWMFullscreen], 1);
-		c->isfullscreen = 1;
-		c->oldtags = c->tags;
-		c->oldbw = c->bw;
-		c->bw = 0;
-		c->tags |= 1;
-		fr->tagset[fr->seltags] |= 1;
-		resizeclient(c, c->mon->mx, c->mon->my, c->mon->mw, c->mon->mh);
-		focusclient(c);
-		restack(selmon);
-	} else if (!fullscreen && c->isfullscreen){
+		configure(c); /* fixes some windows rendering content past edges */
+	} else if (!fullscreen && c->isfullscreen) {
+		c->isfullscreen = 0;
 		XChangeProperty(dpy, c->win, netatom[NetWMState], XA_ATOM, 32,
 			PropModeReplace, (unsigned char*)0, 0);
-		c->isfullscreen = 0;
-		c->tags = c->oldtags;
-		c->bw = c->oldbw;
-		c->x = c->oldx;
-		c->y = c->oldy;
-		c->w = c->oldw;
-		c->h = c->oldh;
-		resizeclient(c, c->x, c->y, c->w, c->h);
-		focusclient(c);
-		arrange(c->mon);
+	}
+}/*}}}*/
+/* setopenframes() {{{*/
+static void setopenframes(Monitor * m, unsigned int nf)
+{
+	int i, j;
+	Arg arg;
+
+	if (nf > NFRAMES)
+		return;
+	for (i = selmon->nopenfrms + 1; i < NFRAMES; i++)
+		for (j = 1; j <= selmon->nopenfrms; j++)
+			if (selmon->frames[i].last == selmon->frames[j].last) {
+				selmon->frames[i].last = NULL;
+				break;
+			}
+	m->nopenfrms = nf;
+	if (nf < nframehooks) {
+		switch(nf) {
+			case 1: arg.v = framehooks[1]; break;
+			case 2: arg.v = framehooks[2]; break;
+			case 3: arg.v = framehooks[3]; break;
+			default: arg.v = framehooks[0];
+		}
+		spawn(&arg);
+	}
+}
+/*}}}*/
+/* setselfrm() {{{*/
+void setselfrm(Monitor * m, unsigned int frm)
+{
+	if (m->selfrm != frm) {
+		m->selfrmold = m->selfrm;
+		m->selfrm = frm;
 	}
 }/*}}}*/
 /* setup() {{{*/
@@ -1863,9 +1682,7 @@ void setup(void)
 		die("no fonts could be loaded.");
 	lrpad = drw->fonts->h;
 	bh = drw->fonts->h + 2;
-	nframes = LENGTH(geometry) + 1;
-	btagmaxx = ecalloc(LENGTH(tags), sizeof *tags);
-	bframemaxx = ecalloc(nframes, sizeof *bframemaxx);
+	nframehooks = LENGTH(framehooks);
 	updategeom();
 	/* init atoms */
 	utf8string = XInternAtom(dpy, "UTF8_STRING", False);
@@ -1935,7 +1752,7 @@ void showhide(Client *c)
 	if (isinfrm(c)) { 
 		/* show clients top down */
 		XMoveWindow(dpy, c->win, c->x, c->y);
-		if (isfloating(c) && !c->isfullscreen)
+		if (isfloating(c))
 			resize(c, c->x, c->y, c->w, c->h, 0);
 		showhide(c->snext);
 	} else {
@@ -1950,206 +1767,6 @@ void sigchld(int unused)
 	if (signal(SIGCHLD, sigchld) == SIG_ERR)
 		die("can't install SIGCHLD handler:");
 	while (0 < waitpid(-1, NULL, WNOHANG));
-} /*}}}*/
-/* spawn() {{{*/
-void spawn(const Arg *arg)
-{
-	if (!arg)
-		return;
-	if (arg->v == dmenucmd)
-		dmenumon[0] = '0' + selmon->num;
-	if (fork() == 0) {
-		if (dpy)
-			close(ConnectionNumber(dpy));
-		setsid();
-		execvp(((char **)arg->v)[0], (char **)arg->v);
-		fprintf(stderr, "staticdwm: execvp %s", ((char **)arg->v)[0]);
-		perror(" failed");
-		exit(EXIT_SUCCESS);
-	}
-}/*}}}*/
-/* swapfocus() {{{*/
-void swapfocus(const Arg *arg)
-{
-	if (selmon->selfrm != selmon->focfrm) { /*swap selected/focused */
-		unsigned int i = selmon->selfrm;
-
-		if (FOCUSED(selmon))
-			unfocus(FOCUSED(selmon), 0);
-		selmon->selfrm = selmon->focfrm;
-		selmon->focfrm = i;
-		refocus();
-		restack(selmon);
-	} else if (ntiles) { /* swap to/from first tiled frame */
-		int f = (ntiles == 1) ? 0 : 2; /*prefer second tiled frame to floating*/
-
-		unfocus(FOCUSED(selmon), 0);
-		if (selmon->focfrm == 1)
-			selmon->focfrm = selmon->selfrm = f;
-		else
-			selmon->focfrm = selmon->selfrm = 1;
-		refocus();
-		restack(selmon);
-	}
-}/*}}}*/
-/* swapframe() {{{*/
-void swapframe(const Arg *arg)
-{
-	if (selmon->selfrm != selmon->focfrm) {
-		exchangeframecontents(selmon->selfrm, selmon->focfrm);
-	} else if (ntiles > 1) {
-		exchangeframecontents(1, 2);
-	} else
-		return;
-	arrange(selmon);
-}/*}}}*/
-/* tag() {{{*/
-void tag(const Arg *arg)
-{
-	Frame * fr = selmon->frames + selmon->selfrm;
-
-	if (arg && fr->last && arg->ui & TAGMASK) {
-		if (selmon->selfrm == selmon->focfrm)
-			unfocus(fr->last, 0);
-		fr->last->tags = arg->ui & TAGMASK;
-		fr->last = selwinforselfrm(selmon, 0);
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		else
-			restacksel();
-		arrange(selmon);
-	}
-}/*}}}*/
-/* tagmon() {{{*/
-void tagmon(const Arg *arg)
-{
-	if (!arg || !SELECTED(selmon) || !mons->next)
-		return;
-	sendmon(SELECTED(selmon), dirtomon(arg->i));
-}/*}}}*/
-/* togglebar() {{{*/
-void togglebar(const Arg *arg)
-{
-	selmon->showbar = !selmon->showbar;
-	updatebarpos(selmon);
-	updatefrmpos(selmon);
-	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by,
-						selmon->ww, bh);
-	arrange(selmon);
-} /*}}}*/
-/* toggleframe() {{{*/
-void toggleframe(const Arg *arg)
-{
-	int sel = selmon->selfrm;
-
-	if (!arg)
-		return;
-	if (arg->i <= 0)
-		sel = (sel == 0 || sel == ntiles) ? 1 : sel + 1;
-	else
-		sel = (sel == 0 || sel == 1) ? ntiles : sel - 1;
-	if (selmon->selfrm != sel) {
-		unfocus(FOCUSED(selmon), 0);
-		selmon->selfrm = sel;
-		selmon->focfrm = sel;
-		/*refill tiled frame previously filled with floating/fullscreen client*/
-		if (selmon->selfrm && (isfloating(FOCUSED(selmon)) ||
-				(FOCUSED(selmon) && FOCUSED(selmon)->isfullscreen)))
-			FOCUSED(selmon) = NULL;
-		refocus();
-		arrange(selmon);
-	}
-}/*}}}*/
-/* togglefloating() {{{*/
-void togglefloating(const Arg *arg)
-{
-	Client * c = SELECTED(selmon);
-	Frame * fr = selmon->frames;
-
-	if (!c || c->isfullscreen)
-		return;
-	if (selmon->selfrm == selmon->focfrm)
-		unfocus(FOCUSED(selmon), 0);
-	if (!isfloating(c)) {
-		c->oldtags = c->tags;
-		c->tags |= 1;
-		fr->tagset[fr->seltags] |= 1;
-		fr->last = c;
-		if (selmon->selfrm == selmon->focfrm)
-			selmon->focfrm = 0;
-		selmon->selfrm = 0;
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		restack(selmon);
-	} else {
-		unsigned int ui = ~fr->tagset[fr->seltags];
-
-		/* give up if floating frame is viewing every oldtag/tag */
-		if (c->oldtags & ui)
-			c->tags = c->oldtags & ui;
-		else if (c->tags & ui)
-			c->tags &= ui;
-		if (selmon->selfrm == selmon->focfrm)
-			focusclient(c);
-		else
-			for (ui = 1; ui < ntiles; ui++)
-				if (selmon->frames[ui].last == c) {
-					selmon->selfrm = ui;
-					break;
-				}
-		arrange(c->mon);
-	}
-} /*}}}*/
-/* toggletag() {{{*/
-void toggletag(const Arg *arg)
-{
-	Frame * fr = selmon->frames + selmon->selfrm;
-	unsigned int newtags;
-
-	if (!arg || !fr->last)
-		return;
-	newtags = fr->last->tags ^ (arg->ui & TAGMASK);
-	if (newtags) {
-		if (selmon->selfrm == selmon->focfrm)
-			unfocus(fr->last, 0);
-		fr->last->tags = newtags;
-		fr->last = selwinforselfrm(selmon, 0);
-		arrange(selmon);
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		else
-			restacksel();
-	}
-}/*}}}*/
-/* toggleview() {{{*/
-void toggleview(const Arg *arg)
-{
-	Frame * fr = selmon->frames + selmon->selfrm;
-	unsigned int argts = arg ? arg->ui : 0;
-	unsigned int ts = fr->tagset[fr->seltags] ^ (argts & TAGMASK);
-
-	if (ts == fr->tagset[fr->seltags] && !SELECTED(selmon))
-		return;
-	if (argts && ts) {
-		if (selmon->selfrm == selmon->focfrm)
-			unfocus(fr->last, 0);
-		fr->tagset[fr->seltags] = ts;
-		fr->last = selwinforselfrm(selmon, 0);
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		else {
-			/* if focused frame client is pulled to floating, empty it*/
-			if (!selmon->selfrm && FOCUSED(selmon) == SELECTED(selmon)) {
-				unfocus(FOCUSED(selmon), 0);
-				FOCUSED(selmon) = NULL;
-			}
-			restacksel();
-		}
-		if (!FOCUSED(selmon))
-			focusnothing();
-		arrange(selmon);
-	}
-	
 }/*}}}*/
 /* unfocus() {{{*/
 void unfocus(Client *c, int setfocus)
@@ -2158,21 +1775,46 @@ void unfocus(Client *c, int setfocus)
 		return;
 	grabbuttons(c, 0);
 	XSetWindowBorder(dpy, c->win, scheme[SchemeNorm][ColBorder].pixel);
-	if (setfocus) {
-		XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
-	}
+	if (setfocus)
+		focusnothing();
 }/*}}}*/
 /* unmanage() {{{*/
 void unmanage(Client *c, int destroyed)
 {
 	int i;
-	Monitor *m = c->mon;
+	Client * focusto;
+	Monitor * m;
 	XWindowChanges wc;
 
+	if (!c)
+		return;
+	m = c->mon;
+	focusto = c->focusto;
+	while (c->focusfrom) { /* clear focusto references to this client */
+		ClientLink * todel = c->focusfrom;
+
+		c->focusfrom->c->focusto = focusto;
+		attachfocus(c->focusfrom->c); /* focus c's focusto instead of c*/
+		c->focusfrom = c->focusfrom->next;
+		free(todel);
+	}
+	c->focusfrom = focusto ? focusto->focusfrom : 0;
+	while (c->focusfrom) { /* clear focusfrom reference to this client */
+		if (c->focusfrom->c == c) {
+			if (c->focusfrom->prev)
+				c->focusfrom->prev->next = c->focusfrom->next;
+			else
+				focusto->focusfrom = c->focusfrom->next;
+			if (c->focusfrom->next)
+				c->focusfrom->next->prev = c->focusfrom->prev;
+			free(c->focusfrom);
+			break;
+		}
+		c->focusfrom = c->focusfrom->next;
+	}
 	if (c == m->frames[m->selfrm].last) /* refill selected */
 		m->frames[m->selfrm].last = selwinforselfrm(m, -1);
-	for (i = 0; i < nframes; i++) /* clear others */
+	for (i = 0; i < NFRAMES; i++) /* clear others */
 		if (c == selmon->frames[i].last)
 			selmon->frames[i].last = NULL;
 	detach(c);
@@ -2190,8 +1832,12 @@ void unmanage(Client *c, int destroyed)
 	}
 	free(c);
 	updateclientlist();
-	if (m == selmon)
-		refocus();
+	if (m == selmon) {
+		if (focusto)
+			focusclient(focusto);
+		else
+			refocus();
+	}
 	arrange(m);
 }/*}}}*/
 /* unmapnotify() {{{*/
@@ -2241,6 +1887,17 @@ void updatebarpos(Monitor *m)
 	} else
 		m->by = -bh;
 }/*}}}*/
+/* updateborder() {{{*/
+void updateborder(Client * c, int bw)
+{
+	XWindowChanges wc;
+
+	if (!c || bw < 0)
+		return;
+	wc.border_width = c->bw = bw;
+	XConfigureWindow(dpy, c->win, CWBorderWidth, &wc);
+	/*configure(c);*/
+}/*}}}*/
 /* updateclientlist() {{{*/
 void updateclientlist(void)
 {
@@ -2257,10 +1914,10 @@ void updateclientlist(void)
 /* updatefrmpos() {{{*/
 void updatefrmpos(Monitor * m)
 {
-	if (ntiles <= sizeof geometry) {
+	if (m->nopenfrms <= sizeof geometry && m->nopenfrms > 0) {
 		int i;
 		Frame * fr = m->frames;
-		const float * geo = geometry[ntiles - 1];
+		const float * geo = geometry[m->nopenfrms - 1];
 		int y = m->wy, h = m->wh;
 
 		fr->x = m->wx;
@@ -2268,7 +1925,7 @@ void updatefrmpos(Monitor * m)
 		fr->w = m->ww;
 		fr->h = h;
 		fr++;
-		for (i = 1; i <= ntiles; i++, fr++)
+		for (i = 1; i <= m->nopenfrms; i++, fr++)
 		{
 			fr->x = (*(geo++))*m->ww + m->wx;
 			fr->y = (*(geo++))*h + y;
@@ -2437,10 +2094,9 @@ void updatewindowtype(Client *c)
 	if (state == netatom[NetWMFullscreen])
 		setfullscreen(c, 1);
 	if (wtype == netatom[NetWMWindowTypeDialog]) {
-		Frame * fr = c->mon->frames;
-
-		c->tags |= 1;
-		fr->tagset[fr->seltags] |= 1;
+		c->isfloating = 1;
+		if (!c->focusto)
+			c->focusto = FOCUSED(selmon);
 	}
 }/*}}}*/
 /* updatewmhints() {{{*/
@@ -2459,38 +2115,6 @@ void updatewmhints(Client *c)
 		else
 			c->neverfocus = 0;
 		XFree(wmh);
-	}
-}/*}}}*/
-/* view() {{{*/
-void view(const Arg *arg)
-{
-	unsigned int ts = (arg ? arg->ui : 0) & TAGMASK;
-	Frame * fr = selmon->frames + selmon->selfrm;
-
-	if (ts == fr->tagset[fr->seltags] && SELECTED(selmon))
-		return;
-	if (!ts) {
-		fr->seltags ^= 1;
-		ts = fr->tagset[fr->seltags];
-	}
-	if (ts) {
-		if (selmon->selfrm == selmon->focfrm)
-			unfocus(fr->last, 0);
-		fr->tagset[fr->seltags] = ts;
-		fr->last = selwinforselfrm(selmon, 0);
-		if (selmon->selfrm == selmon->focfrm)
-			refocus();
-		else {
-			restacksel();
-			/* if focused frame client is pulled to floating, empty it*/
-			if (!selmon->selfrm && FOCUSED(selmon) == SELECTED(selmon)) {
-				unfocus(FOCUSED(selmon), 0);
-				FOCUSED(selmon) = NULL;
-			}
-		}
-		if (!FOCUSED(selmon))
-			focusnothing();
-		arrange(selmon);
 	}
 }/*}}}*/
 /* wintoclient() {{{*/
@@ -2557,6 +2181,8 @@ int xerrorstart(Display *dpy, XErrorEvent *ee)
 /* main() {{{*/
 int main(int argc, char *argv[])
 {
+	Monitor * m;
+
 	if (argc == 2 && !strcmp("-v", argv[1]))
 		die("staticdwm-"VERSION);
 	else if (argc != 1)
@@ -2568,9 +2194,497 @@ int main(int argc, char *argv[])
 	checkotherwm();
 	setup();
 	scan();
+	updatefrmpos(selmon);
+	arrange(selmon);
+	for (m = mons; m; m = m->next) /* call frame swap hooks on start */
+		setopenframes(m, m->nopenfrms);
 	run();
 	cleanup();
 	XCloseDisplay(dpy);
 	return EXIT_SUCCESS;
+}/*}}}*/
+/*}}}*/
+/* User Called Functions {{{*/
+/* closeframe(){{{*/
+void closeframe(const Arg *arg)
+{
+	int i;
+	unsigned int foc, sel = selmon->selfrmold;
+
+	if (selmon->selfrm == 0)
+		return;
+	if (sel > selmon->selfrm) sel--;/*try selold after removing sel*/
+	if (sel >= selmon->nopenfrms) sel = selmon->selfrm;/*or what is now sel*/
+	if (sel == selmon->nopenfrms) sel--;/*or if sel was last, the new last*/
+	if (selmon->selfrm == selmon->focfrm) {
+		foc = sel;
+		unfocus(FOCUSED(selmon), 0);
+	} else {
+		foc = selmon->focfrm; /* focus should not move if set differently */
+		if (foc >= selmon->selfrm) foc--; /* except because sel was removed */
+	}
+	for (i = selmon->selfrm; i < selmon->nopenfrms; i++)
+		exchangeframecontents(i, i+1);
+	setfocfrm(selmon, foc);
+	setselfrm(selmon, sel);
+	setopenframes(selmon, selmon->nopenfrms - 1);
+	if (foc == sel)
+		refocus();
+	updatefrmpos(selmon);
+	arrange(selmon);
+}/*}}}*/
+/* closeframebelow(){{{*/
+void closeframebelow(const Arg *arg)
+{
+	if (!arg)
+		return;
+	if (arg->ui > selmon->nopenfrms) {
+		if (arg->ui < NFRAMES) {
+			setopenframes(selmon, arg->ui);
+			updatefrmpos(selmon);
+			arrange(selmon);
+		}
+		return;
+	}
+	setopenframes(selmon, arg->ui);
+	if (selmon->selfrm > arg->ui)
+		setselfrm(selmon, arg->ui);
+	if (selmon->focfrm > arg->ui) {
+		unfocus(FOCUSED(selmon), 0);
+		setfocfrm(selmon, arg->ui);
+		refocus();
+	}
+	updatefrmpos(selmon);
+	arrange(selmon);
+}/*}}}*/
+/* emptyframe() {{{*/
+void emptyframe(const Arg *arg)
+{
+	if (selmon->selfrm == selmon->focfrm)
+		unfocus(FOCUSED(selmon), 0);
+	selmon->frames[selmon->selfrm].last = NULL;
+	if (selmon->selfrm == selmon->focfrm)
+		focusnothing();
+	arrange(selmon);
+}/*}}}*/
+/* fillframe() {{{*/
+void fillframe(const Arg *arg)
+{
+	Client *c;
+
+	if (arg && (c = selwinforselfrm(selmon, arg->i))) {
+		if (selmon->selfrm == selmon->focfrm)
+			unfocus(FOCUSED(selmon), 0);
+		selmon->frames[selmon->selfrm].last = c;
+		if (selmon->selfrm == selmon->focfrm)
+			refocus();
+		else
+			restacksel();
+		arrange(selmon);
+	}
+}/*}}}*/
+/* focusframe() {{{*/
+void focusframe(const Arg *arg)
+{
+	if (arg && arg->ui < NFRAMES &&
+		(selmon->focfrm != arg->ui || selmon->selfrm != arg->ui)) {
+		unfocus(FOCUSED(selmon), 0);
+		setfocfrm(selmon, arg->ui);
+		setselfrm(selmon, arg->ui);
+		if (selmon->nopenfrms < arg->ui) {
+			setopenframes(selmon, arg->ui);
+			updatefrmpos(selmon);
+		}
+		if (FOCUSED(selmon))
+			refocus();
+		else
+			focusnothing();
+		arrange(selmon);
+	}
+}/*}}}*/
+/* focusmon() {{{*/
+void focusmon(const Arg *arg)
+{
+	Monitor *m;
+
+	if (!arg || !mons->next)
+		return;
+	if ((m = dirtomon(arg->i)) == selmon)
+		return;
+	unfocus(FOCUSED(selmon), 0);
+	selmon = m;
+	refocus();
+}/*}}}*/
+/* killclient() {{{*/
+static void killclient(const Arg *arg)
+{
+	Client * c = SELECTED(selmon);
+
+	if (c && !sendevent(c, wmatom[WMDelete])) {
+		XGrabServer(dpy);
+		XSetErrorHandler(xerrordummy);
+		XSetCloseDownMode(dpy, DestroyAll);
+		XKillClient(dpy, c->win);
+		XSync(dpy, False);
+		XSetErrorHandler(xerror);
+		XUngrabServer(dpy);
+	}
+}/*}}}*/
+/* movemouse() {{{*/
+void movemouse(const Arg *arg)
+{
+	int x, y, ocx, ocy, nx, ny;
+	Client *c;
+	Monitor *m;
+	XEvent ev;
+	Time lasttime = 0;
+
+	if (!(c = FOCUSED(selmon)))
+		return;
+	restack(selmon);
+	ocx = c->x;
+	ocy = c->y;
+	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess)
+		return;
+	if (!getrootptr(&x, &y))
+		return;
+	do {
+		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+		switch(ev.type) {
+		case ConfigureRequest:
+		case Expose:
+		case MapRequest:
+			handler[ev.type](&ev);
+			break;
+		case MotionNotify:
+			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
+				continue;
+			lasttime = ev.xmotion.time;
+
+			nx = ocx + (ev.xmotion.x - x);
+			ny = ocy + (ev.xmotion.y - y);
+			if (abs(selmon->wx - nx) < snap)
+				nx = selmon->wx;
+			else if (abs((selmon->wx + selmon->ww) - (nx + WIDTH(c))) < snap)
+				nx = selmon->wx + selmon->ww - WIDTH(c);
+			if (abs(selmon->wy - ny) < snap)
+				ny = selmon->wy;
+			else if (abs((selmon->wy + selmon->wh) - (ny + HEIGHT(c))) < snap)
+				ny = selmon->wy + selmon->wh - HEIGHT(c);
+			if (!isfloating(c) && (abs(nx - c->x) > snap
+							   || abs(ny - c->y) > snap)) {
+				c->oldx = nx; c->oldy = ny; c->oldw = c->w; c->oldh = c->h;
+				togglefloating(NULL);
+			}
+			if (isfloating(c))
+				resize(c, nx, ny, c->w, c->h, 1);
+			break;
+		}
+	} while (ev.type != ButtonRelease);
+	XUngrabPointer(dpy, CurrentTime);
+	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
+		sendmon(c, m);
+		selmon = m;
+		refocus();
+	}
+}/*}}}*/
+/* onlyframe(){{{*/
+void onlyframe(const Arg *arg)
+{
+	if (selmon->selfrm <= 0)
+		return;
+	if (selmon->focfrm != 1)
+		unfocus(FOCUSED(selmon), 0);
+	if (selmon->selfrm != 1)
+		exchangeframecontents(1, selmon->selfrm);
+	setfocfrm(selmon, 1);
+	setselfrm(selmon, 1);
+	refocus();
+	setopenframes(selmon, 1);
+	updatefrmpos(selmon);
+	arrange(selmon);
+}/*}}}*/
+/* quit() {{{*/
+void quit(const Arg *arg)
+{
+	running = 0;
+}/*}}}*/
+/* resizemouse() {{{*/
+void resizemouse(const Arg *arg)
+{
+	int ocx, ocy, nw, nh;
+	Client *c;
+	Monitor *m;
+	XEvent ev;
+	Time lasttime = 0;
+
+	if (!(c = FOCUSED(selmon)))
+		return;
+	restack(selmon);
+	ocx = c->x;
+	ocy = c->y;
+	if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurResize]->cursor, CurrentTime) != GrabSuccess)
+		return;
+	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
+					c->w + c->bw - 1, c->h + c->bw - 1);
+	do {
+		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
+		switch(ev.type) {
+		case ConfigureRequest:
+		case Expose:
+		case MapRequest:
+			handler[ev.type](&ev);
+			break;
+		case MotionNotify:
+			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
+				continue;
+			lasttime = ev.xmotion.time;
+
+			nw = MAX(ev.xmotion.x - ocx - 2 * c->bw + 1, 1);
+			nh = MAX(ev.xmotion.y - ocy - 2 * c->bw + 1, 1);
+			if (c->mon->wx + nw >= selmon->wx
+				&& c->mon->wx + nw <= selmon->wx + selmon->ww
+				&& c->mon->wy + nh >= selmon->wy
+				&& c->mon->wy + nh <= selmon->wy + selmon->wh)
+			{
+				if (!isfloating(c) && (abs(nw - c->w) > snap
+								   || abs(nh - c->h) > snap)) {
+					c->oldx = c->x; c->oldy = c->y; c->oldw = nw; c->oldh = nh;
+					togglefloating(NULL);
+				}
+			}
+			if (isfloating(c))
+				resize(c, c->x, c->y, nw, nh, 1);
+			break;
+		}
+	} while (ev.type != ButtonRelease);
+	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
+					c->w + c->bw - 1, c->h + c->bw - 1);
+	XUngrabPointer(dpy, CurrentTime);
+	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+	if ((m = recttomon(c->x, c->y, c->w, c->h)) != selmon) {
+		sendmon(c, m);
+		selmon = m;
+		refocus();
+	}
+}/*}}}*/
+/* selectframe(){{{*/
+void selectframe(const Arg *arg)
+{
+	if (arg && arg->ui < NFRAMES && selmon->selfrm != arg->ui) {
+		setselfrm(selmon, arg->ui);
+		if (selmon->nopenfrms < arg->ui) {
+			setopenframes(selmon, arg->ui);
+			updatefrmpos(selmon);
+		}
+		arrange(selmon);
+		drawbar(selmon); /* update frame selection marker */
+	}
+}/*}}}*/
+/* spawn() {{{*/
+void spawn(const Arg *arg)
+{
+	if (!arg)
+		return;
+	if (arg->v == dmenucmd)
+		dmenumon[0] = '0' + selmon->num;
+	if (fork() == 0) {
+		if (dpy)
+			close(ConnectionNumber(dpy));
+		setsid();
+		execvp(((char **)arg->v)[0], (char **)arg->v);
+		fprintf(stderr, "staticdwm: execvp %s", ((char **)arg->v)[0]);
+		perror(" failed");
+		exit(EXIT_SUCCESS);
+	}
+}/*}}}*/
+/* swapfocus() {{{*/
+void swapfocus(const Arg *arg)
+{
+	int self, focf;
+	if (selmon->nopenfrms == 0)
+		return;
+	if (selmon->selfrm != selmon->focfrm) {
+		focf = selmon->selfrm;
+		self = selmon->focfrm;
+	} else if (((focf = selmon->focfrmold) != selmon->focfrm ||
+			    (focf = selmon->selfrmold) != selmon->focfrm) &&
+				 focf <= selmon->nopenfrms) {
+		self = focf;
+	} else { /* prefer swapping to first over second over floating */
+		focf = self = selmon->focfrm!=1 ? 1 : (selmon->nopenfrms>1 ? 2 : 0);
+	}
+	unfocus(FOCUSED(selmon), 0);
+	setselfrm(selmon, self);
+	setfocfrm(selmon, focf);
+	refocus();
+	restack(selmon);
+}/*}}}*/
+/* swapframe() {{{*/
+void swapframe(const Arg *arg)
+{
+	int f;
+
+	if (selmon->focfrm == 0 || selmon->selfrm == 0 || selmon->nopenfrms < 2)
+		return; /* don't swap to floating */
+	if (selmon->selfrm != selmon->focfrm) {
+		f = selmon->selfrm;
+		exchangeframecontents(selmon->selfrm, selmon->focfrm);
+	} else if ((((f = selmon->focfrmold) != selmon->focfrm && f != 0) ||
+			    ((f = selmon->selfrmold) != selmon->focfrm && f != 0)) &&
+				 f <= selmon->nopenfrms) {
+	} else { /* prefer swapping with first, or second if first is focused */
+		f = selmon->focfrm == 1 ? 2 : 1;
+	}
+	exchangeframecontents(f, selmon->focfrm);
+	arrange(selmon);
+}/*}}}*/
+/* tag() {{{*/
+void tag(const Arg *arg)
+{
+	Frame * fr = selmon->frames + selmon->selfrm;
+	Client * c = fr->last;
+	if (!arg || !c || arg->ui >= NTAGS)
+		return;
+	c->tag = arg->ui;
+	if (c->isfloating) {
+		c->isfloating = 0;
+		if (selmon->selfrm == selmon->focfrm) {
+			updateborder(c, borderpx);
+			SETBORDERCOL(c);
+			unfocus(c, 0);
+			c = selmon->frames->last = selwinforselfrm(selmon, 0);
+			focusclient(c);
+		}
+		arrange(selmon);
+	} else {
+		if (selmon->selfrm == selmon->focfrm)
+			unfocus(fr->last, 0);
+		fr->last = selwinforselfrm(selmon, 0);
+		if (selmon->selfrm == selmon->focfrm)
+			refocus();
+		else
+			restacksel();
+		arrange(selmon);
+	}
+}/*}}}*/
+/* tagandview() {{{*/
+void tagandview(const Arg *arg)
+{
+	Frame * fr = selmon->frames + selmon->selfrm;
+	if (!arg || arg->ui >= NTAGS || !fr->last ||
+		fr->last->isfloating)
+		return;
+	fr->last->tag = arg->ui;
+	fr->tag = arg->ui;
+	drawbars();
+}/*}}}*/
+/* tagmon() {{{*/
+void tagmon(const Arg *arg)
+{
+	if (!arg || !SELECTED(selmon) || !mons->next)
+		return;
+	sendmon(SELECTED(selmon), dirtomon(arg->i));
+}/*}}}*/
+/* togglebar() {{{*/
+void togglebar(const Arg *arg)
+{
+	selmon->showbar = !selmon->showbar;
+	updatebarpos(selmon);
+	updatefrmpos(selmon);
+	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by,
+						selmon->ww, bh);
+	arrange(selmon);
+} /*}}}*/
+/* togglefloating() {{{*/
+void togglefloating(const Arg *arg)
+{
+	Client * c = SELECTED(selmon);
+	Frame * fr = selmon->frames + selmon->selfrm;
+
+	if (!c)
+		return;
+	if (!isfloating(c)) {
+		c->isfloating = 1;
+		c->bw = flborderpx;
+		resizeclient(c, c->oldx, c->oldy, c->oldw, c->oldh);
+		c->lastfrm = selmon->selfrm;
+		fr->last = selwinforselfrm(selmon, 0);
+		if (selmon->selfrm == selmon->focfrm) {
+			setfocfrm(selmon, 0);
+			setselfrm(selmon, 0);
+		} else {
+			setselfrm(selmon, 0);
+			restack(selmon);
+		}
+		selmon->frames->last = c;
+		arrange(selmon);
+	} else {
+		c->isfloating = 0;
+		updateborder(c, borderpx);
+		c->oldx = c->x; c->oldy = c->y; c->oldw = c->w; c->oldh = c->h;
+		if (c->lastfrm > 0 && c->lastfrm <= selmon->nopenfrms &&
+				selmon->frames[c->lastfrm].tag == c->tag) {
+			if (selmon->selfrm == selmon->focfrm) {
+				setfocfrm(selmon, c->lastfrm);
+				setselfrm(selmon, c->lastfrm);
+				SELECTED(selmon) = c;
+			} else {
+				setselfrm(selmon, c->lastfrm);
+				if (selmon->focfrm != selmon->selfrm)
+					SELECTED(selmon) = c; /* don't fill focused frame */
+			}
+		} else if (selmon->selfrm == selmon->focfrm) {
+			unfocus(c, 0);
+			focusclient((selmon->frames->last = selwinforselfrm(selmon, 0)));
+		}
+		arrange(selmon);
+	}
+	SETBORDERCOL(c);
+} /*}}}*/
+/* toggleframe() {{{*/
+void toggleframe(const Arg *arg)
+{
+	int sel = selmon->selfrm;
+
+	if (!arg)
+		return;
+	if (arg->i <= 0)
+		sel = (sel == 0 || sel == selmon->nopenfrms) ? 1 : sel + 1;
+	else
+		sel = (sel == 0 || sel == 1) ? selmon->nopenfrms : sel - 1;
+	if (selmon->selfrm != sel) {
+		unfocus(FOCUSED(selmon), 0);
+		setfocfrm(selmon, sel);
+		setselfrm(selmon, sel);
+		/*refill tiled frame previously filled with floating client*/
+		if (selmon->selfrm && (isfloating(FOCUSED(selmon))))
+			FOCUSED(selmon) = NULL;
+		refocus();
+		arrange(selmon);
+	}
+}/*}}}*/
+/* view() {{{*/
+void view(const Arg *arg)
+{
+	unsigned int tag = arg->ui;
+	Frame * fr = selmon->frames + selmon->selfrm;
+
+	if (selmon->selfrm == 0 || tag < 0 ||
+			tag >= NTAGS || (tag == fr->tag && SELECTED(selmon)))
+		return;
+	if (selmon->selfrm == selmon->focfrm)
+		unfocus(fr->last, 0);
+	fr->tag = tag;
+	fr->last = selwinforselfrm(selmon, 0);
+	if (selmon->selfrm == selmon->focfrm)
+		refocus();
+	else 
+		restacksel();
+	if (!FOCUSED(selmon))
+		focusnothing();
+	arrange(selmon);
 }/*}}}*/
 /*}}}*/

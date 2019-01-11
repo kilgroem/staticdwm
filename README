@@ -1,13 +1,20 @@
 staticdwm - static/dynamic window manager
 ============================
-staticdwm is a window manager for X and a fork of dwm. It borrows the concept of
-frames from ratpoison and uses dwm's tag system to select windows to fill them.
-
+staticdwm is a window manager for X and a fork of dwm. Windows are placed in
+frames whose size and position are defined at compile time. A different layout
+is available for each number of open frames. In a way analogous to tabs, frames
+are filled with windows sharing the same tag.  
 
 Requirements
 ------------
 In order to build staticdwm you need the Xlib header files.
 
+Configuration
+-------------
+The configuration of staticdwm is done by creating a custom config.h and
+(re)compiling the source code. Be sure to add a way to launch applications
+applicable to your system, as well as edit frame sizes and positions.
+A command to run dmenu is part of the default configuration.
 
 Installation
 ------------
@@ -40,10 +47,3 @@ like this in your .xinitrc:
     	sleep 1
     done &
     exec staticdwm
-
-
-Configuration
--------------
-The configuration of staticdwm is done by creating a custom config.h and
-(re)compiling the source code. Be sure to add a way to launch applications
-applicable to your system.

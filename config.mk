@@ -1,5 +1,5 @@
 # staticdwm version
-VERSION = 6.1.0
+VERSION = 6.1.01
 
 # Customize below to fit your system
 

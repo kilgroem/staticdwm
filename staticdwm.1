@@ -2,40 +2,24 @@
 .SH NAME
 staticdwm \- static/dynamic window manager
 .SH SYNOPSIS
-.B dwm
+.B staticdwm
 .RB [ \-v ]
 .SH DESCRIPTION
-staticdwm is a window manager for X, and a fork of dwm. It places windows into
-fixed sized frames selected from a pool determined by the window and frame's
-tags. Each fixed sized frame is filled with a single window and alternates may
-be cycled through, or window/frame tags may be edited to select various windows.
+staticdwm is a window manager for X and a fork of dwm. Windows are placed in frames whose size and position are defined at compile time. A different layout is available for each number of open frames. Each frame and window is tagged.  Frames are filled with windows sharing the same tag, in a way analogous to tabs.
 .P
-All windows sharing tags with the first frame are floating windows, and may be
-moved and resized. Any window tagged in this floating frame will not appear in a
-fixed size frame. When the window manager needs to make windows floating, it
-uses tag number 0 and also selects this tag on the floating frame.
+A special frame displays all floating windows. Neither the floating frame or floating windows use tags, but windows may be tagged to stop floating. Floating window are moveable and resizeable. An alternate color scheme is used when selecting the floating frame.
 .P
-Frames may be opened or closed, and their relative sizes and layouts depend only
-on the number of frames open. The position of frames is defined at compile time,
-with a single layout defined for each possible number of frames. These layouts
-do not necessarily need to tile, and are based on relative screen proportions.
-Closed frames are not shown, but retain their tags and other information. If
-reopened they will try to refill with the previous window, if it is available.
+Other frames may be opened or closed. The size and position of each frame is determined by the number of frames open, i.e. there is a layout for one frame open, a layout for two frames open, etc. When a window is put into a frame it attempts to fill it. Closed frames are hidden, but retain their tags and other information, and will be filled with the same window, if it is available.
 .P
-Separate frames may be focused--taking user input, etc.--and selected--acted on
-by the window manager to open, close, select new windows or tags, etc.
+Separate frames may be focused and selected. A window in the focused frame takes input as expected, but any command issued to the window manager, e.g. closing or switching tag, acts on the selected frame instead. You may also swap the focus and selected frames, or their contents including filled window and tag. The selected frame follows the focused frame, unless set differently by the user.
 .P
-A status bar shows the selected frame's tags from those available, the number of
-windows available for each open frame, part of the title of the selected window
-(if differing from the focused window), the focused window's title. Selected
-tags are highlighted and marked with boxes. Tags are marked with an empty box if
-any window shares that tag and a filled one if the selected window does. The
-focus frame is also highlighted in the list, and the selected frame is
-highlighted in a different color if it is different than the focused. The titles
-of floating windows are marked with boxes, which are filled if the window is
-fixed.
+The bar shows a list of tags, a list of frames, a window title, and a user set status. The tag list consists of list of numbers indicating the number of windows marked with that tag. The tags of the focused and selected frames are highlighted. A square box around the tag number indicates an urgent window on that tag.
 .P
-A special color border is drawn around focused windows.
+The frame lists begins with a number in square brackets to represent the floating frame and the number of floating windows. Following is a pair of square brackets for each frame up to the maximum defined number. A filled frame is labeled as [+], an empty frame as [-], and a closed frame as [ ]. The focus and selected frame markers are also highlighted. For example [10][+][-][+][ ] would indicate ten floating windows and three frames open of a possible four, with the first and third frames being filled with windows.
+.P
+The space between the frame markers and status is filled with the focused window's title. If the selected frame is different than the focused frame, part of the title of the window filling the selected frame is also displayed. Lastly a user defined status message is displayed.
+.P
+A special color border is drawn around focused windows, with an alternate color available for floating windows, if the border width is not set to 0. 
 .SH OPTIONS
 .TP
 .B \-v
@@ -43,30 +27,10 @@ prints version information to standard output, then exits.
 .SH USAGE
 .SS Status bar
 .TP
-.B X root window name
-is read and displayed in the status text area. It can be set with the
+.B Defining the status message
+The X root window name is read and displayed in the status text area. It can be set with the
 .BR xsetroot (1)
 command.
-.TP
-.B Button1
-Click on a tag label to mark the selected frame with that tag, setting the
-possible windows that frame might display, or displaying them immediately in the
-floating frame. Click on a frame label to focus that frame, while opening it if
-it is closed.
-.TP
-.B Button2
-Click on a frame label to close frames past that one. Click selected or focused
-window title to close that window.
-.TP
-.B Button3
-Click on a tag label to toggle that tag on the selected frame. Click on a frame
-label to select that frame, but not focus it.
-.TP
-.B Ctrl\-Button1
-Click on a tag label to set the selected windows tag.
-.TP
-.B Ctrl\-Button3
-Click on a tag label to toggle that tag on the selected window.
 .SS Keyboard commands
 .TP
 .B Mod1\-Return
@@ -93,125 +57,88 @@ Send focused window to next screen, if any.
 .B Mod1\-b
 Toggles bar on and off.
 .TP
-.B Mod1\-t
-Tags the selected window with all tags except the first.
-.TP
-.B Mod1\-v
-Tags the selected frame with every tag.
-.TP
 .B Mod1\-j
-Fills the frame with the next available window. This ordering depends on when
-the window manager started managing the window. Selects and raises the next
-window for the floating frame.
+Fills the selected frame with the next available window. This ordering depends on when the window manager started managing the window. Selects and raises the next window for the floating frame.
 .TP
 .B Mod1\-k
-Fills the frame with the previous available window. Selects and raises the
-previous window for the floating frame.
+Fills the frame with the previous available window. Selects and raises the previous window for the floating frame.
 .TP
 .B Mod1\-l
-Selects the next frame, excluding the floating one.
+Selects and focuses the next frame, excluding the floating one.
 .TP
 .B Mod1\-h
-Selects the previous frame, excluding the floating one.
-.TP
-.B Mod1\-r
-Lowers the number of visible frames by one, rearranging the windows in the
-frames so the one that was in the selected frame is removed.
-.TP
-.B Mod1\-x
-Swaps the tags and filled window of the selected and focused frames, if
-different. Swaps the first two fixed frames otherwise, if possible.
-.TP
-.B Mod1\-space
-Swaps focus between selected and focused frames, otherwise between floating and
-first fixed frame if it is the only fixed frame, or the first two fixed frames
-if at least two are open.
+Selects and focuses the previous frame, excluding the floating one.
 .TP
 .B Mod1\-o
-Swaps the tags and filled window of the selected frame and the first fixed
-frame then closes any other fixed frames.
+Makes the selected frame the only open frame and focuses it by swapping frame contents and closing all but one frame.
 .TP
-.B Mod1\-Tab
-Swaps a frame's tagset to the previously selected tags.
+.B Mod1\-r
+Closes the selected frame, by swapping frame contents and closing a frame.
+.TP
+.B Mod1\-x
+Swaps contents of focused and selected frames if different, or between focused and previously focused, or between first two frames, or the first and floating frames, preferring that order.
+.TP
+.B Mod1\-space
+Swaps focus between focused and selected frames if different, or between focused and previously focused, or between first two frames, or the first and floating frames, preferring that order.
 .TP
 .B Mod1\-Shift\-c
-Close focused window.
+Close window filling selected frame.
 .TP
 .B Mod1\-Shift\-space
-Toggles floating. Enabling floating tags the selected window and the floating
-frame with the first tag, while storing the window's current tags. To disable
-floating, a window's tags are set to any of the old tags not shared with the
-floating frame. If this would leave it untagged, it tries the same with the
-current tagset, and if this would leave it untagged, leaves the tags unchanged.
+Toggles floating of window filling selected frame. If a window was floating, it attempts to replace the window in the same numbered frame previously occupied, but only if the frame's tag is the same. Otherwise the window is hidden but available to fill a frame.
 .TP
-.B Mod1\-[0..9]
-Set the selected frame's tagset to that tag. For the floating frame this shows
-any windows sharing that tag. For a fixed frame, it adds those windows to the
-pool of windows that may appear in that frame. This also switches the current
-and alternate tagsets.
+.B Mod1\-[1..4]
+Set the selected frame's tag to that number if it is not the floating frame. If there is a window not already on screen sharing that tag it fills the frame.
 .TP
-.B Mod1\-Shift\-[0..9]
-Add/remove that tag on the selected frame's tagset.
+.B Mod1\-Shift\-[1..4]
+Move the window in the selected frame to that number. If there is another window with the selected frame's tag it fills the selected frame.
 .TP
-.B Mod1\-Control\-[0..9]
-Set the tag on the selected window to that tag.
-.TP
-.B Mod1\-Control\-Shift\-[0..9]
-Add/remove that tag on the selected window.
+.B Mod1\-Control\-[1..4]
+Sets the tags of both the selected frame and window in the selected frame to that number. The selected frame does not refill even if empty.
 .TP
 .B Mod1\-[asdf]
-Selects and focuses the corresponding frame. Opens the frame if closed, as well
-as any smaller number frames.
+Selects and focuses the corresponding frame. Opens the frame if closed, as well as any smaller number frames.
 .TP
 .B Mod1\-Shift\-[asdf]
-Selects, but does not focus, the corresponding frame. Does not open frames.
-Window manager actions, such as filling a frame with a window or tagging, affect
-the selected window, while the focused one still accepts input.
+Selects, but does not focus, the corresponding frame. Window manager actions, such as filling a frame with a window or tagging, affect the selected window, while the focused one still accepts input.
 .TP
 .B Mod1\-Control\-[asdf]
-Closes all frames above the corresponding frame. Does nothing on the highest
-numbered frame.
+Closes all frames greater than the one selected, adjusting the focus and selected frames as necessary.
 .TP
 .B Mod1\-Shift\-minus
-Removes the window from the selected frame.
+Removes the window from the selected frame leaving it empty.
 .TP
 .B Mod1\-Shift\-q
-Quit dwm.
+Quit staticdwm.
 .SS Mouse commands
 .TP
 .B Button1
-Click to focus.
+Click on a tag label to mark the selected frame with that tag, setting the possible windows that frame might display and attempting to fill the frame with a window marked with that tag. Click on a frame label to select that frame, while opening it if it is closed. Click an empty frame to focus it. Click on the selected window title to fill the selected frame with the next window. Click on a window to focus it.
+.TP
+.B Button2
+Click on a tag label to move the window in the selected frame to that tag.  Click on a frame label to close frames past that one and select it. Click on the selected window title to close it.
+.TP
+.B Button3
+Click on a tag to move the window in the selected frame to that tag and then select that tag in the selected frame. Click on a frame label to select a frame but NOT focus it. Click on the selected window to swap focus between the previously selected frame, or between focused and selected frames if different.
 .TP
 .B Mod1\-Button1
-Click and drag a window to move it. Windows in fixed frames will be made to
-float, if moved far enough.
+Click and drag on a window to move it. This makes the window floating, if it was in a frame. Click on the window title to fill the selected frame with the previous available window.
 .TP
 .B Mod1\-Button2
-Click a window to toggle floating on it. Enabling floating tags the window and
-the floating frame with the first tag, while storing the window's current tags.
-To disable floating, a window's tags are set to any of the old tags not shared
-with the floating frame. If this would leave it untagged, it tries the same with
-the current tagset, and if this would leave it untagged, leaves the tags
-unchanged.
+Click on a window to toggle floating.
 .TP
 .B Mod1\-Button3
-Click and drag a window to resize it. Windows in fixed frames will be made to
-float, if resized enough.
+Click and drag on a window to resize it. This makes the window floating if it was in frame.
 .SH CUSTOMIZATION
-staticdwm is customized by creating a custom config.h and (re)compiling the
-source code. Pay special attention to commands to launch programs and exit
-staticdwm.
+staticdwm is customized by creating a custom config.h and (re)compiling the source code. Pay special attention to commands to launch programs and exit staticdwm, and to setting the number, sizes, and positions of frames.
 .SH SEE ALSO
 .BR dmenu (1),
 .BR st (1)
 .SH BUGS
-While adapting staticdwm from dwm, an attempt was made to update code for the use of multiple monitors to the new system with frames, but it remains untested, and is not recommended.
+While adapting staticdwm from dwm, an attempt was made to update code for the
+use of multiple monitors to the new system with frames, but it remains untested, and is not recommended.
 .SH BUGS, INHERITED
-Java applications which use the XToolkit/XAWT backend may draw grey windows
-only. The XToolkit/XAWT backend breaks ICCCM-compliance in recent JDK 1.5 and early
-JDK 1.6 versions, because it assumes a reparenting window manager. Possible workarounds
-are using JDK 1.4 (which doesn't contain the XToolkit/XAWT backend) or setting the
-environment variable
+Java applications which use the XToolkit/XAWT backend may draw grey windows only. The XToolkit/XAWT backend breaks ICCCM-compliance in recent JDK 1.5 and early JDK 1.6 versions, because it assumes a reparenting window manager. Possible workarounds are using JDK 1.4 (which doesn't contain the XToolkit/XAWT backend) or setting the environment variable
 .BR AWT_TOOLKIT=MToolkit
 (to use the older Motif backend instead) or running
 .B xprop -root -f _NET_WM_NAME 32a -set _NET_WM_NAME LG3D
@@ -223,8 +150,4 @@ XToolkit/XAWT backend can recognize) or when using OpenJDK setting the environme
 .P
 GTK 2.10.9+ versions contain a broken
 .BR Save\-As
-file dialog implementation,
-which requests to reconfigure its window size in an endless loop. However, its
-window is still respondable during this state, so you can simply ignore the flicker
-until a new GTK version appears, which will fix this bug, approximately
-GTK 2.10.12+ versions.
+file dialog implementation, which requests to reconfigure its window size in an endless loop. However, its window is still respondable during this state, so you can simply ignore the flicker until a new GTK version appears, which will fix this bug, approximately GTK 2.10.12+ versions.
